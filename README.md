@@ -167,7 +167,7 @@ New-Item -ItemType Directory -Force bridge\.local | Out-Null
 if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII bridge\.local\amount-map.json '{}' }
 ```
 
-`{}`이면 새 후원을 집계만 하고 게임에 전달하지 않습니다. 후원자 정보와 메시지·금액 원문은 로그에 출력하거나 저장하지 않습니다. 관찰 모드도 **과거에 저장한 미전달 게임 이벤트는 재시도**합니다. 처음부터 게임 전달을 막으려면 Paper 콘솔에서 `ejt pause`를 사용하고 대기열도 확인하세요. 관찰 중 제외된 후원은 이후 매핑을 바꿔도 재처리할 수 없습니다.
+기본 실행은 **매핑 내용과 관계없이 관찰 모드**입니다. 신규 후원을 게임 이벤트로 선택하지 않고, 기존 미전달 이벤트도 Paper로 보내지 않으며 토큰 파일도 읽지 않습니다. `{}`는 이 의도를 나타내는 빈 매핑입니다. 후원자 정보와 메시지·금액 원문은 실시간 로그에 출력하거나 저장하지 않습니다. 관찰 중 제외된 후원은 이후 매핑을 바꿔도 재처리할 수 없습니다. 이미 Paper에 등록된 대기열은 별개이므로 실제 방송 전에는 서버 콘솔 `ejt pause`와 상태 확인도 병행하세요.
 
 실제 금액 대응을 확인한 후에만 메모장으로 `bridge\.local\amount-map.json`을 편집합니다. 키는 수신 `payAmount` 그대로의 양의 정수 문자열, 값은 기존 규칙의 `1000`, `2000`, `5000`, `30000` 중 하나입니다. 다음은 **형식 설명용이며 대응이 검증됐다는 뜻이 아닙니다**.
 
@@ -186,12 +186,14 @@ if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII br
 .\.venv\Scripts\python.exe bridge/receiver.py --channel-id "방송인의_실제_채널_ID" --amount-map bridge\.local\amount-map.json --token-file "C:\MinecraftServer\plugins\EnJapToi\bridge-token.txt"
 ```
 
+위 실행은 관찰 전용이며 게임에 전달하지 않습니다. 아래 금액 검증 절차를 마친 뒤에만 전달 활성화를 검토하세요.
+
 환경변수 대신 클라이언트 설정 파일을 사용한다면 `--config bridge\.local\client.json`을 추가합니다. 기본 수신 대상은 `donationType=CHAT`입니다. 영상 후원도 별도로 검증하려면 `--donation-type VIDEO`를 명시합니다. 한 실행에서 선택한 한 유형만 처리하며, 검증 없이 영상 후원을 게임에 적용하지 마세요.
 
 - `공식 후원 구독 확인 완료`가 표시돼야 구독 확인을 받은 상태입니다. 분당 대기·완료·제외 건수를 출력합니다.
 - `Paper 전달: queued`는 Paper 대기열 등록, `duplicate`는 같은 로컬 ID가 이미 등록됐음을 뜻합니다. **게임 내 실행 완료를 뜻하지 않습니다.** Yirue가 오프라인이면 기존 플러그인 대기열에 남습니다.
-- Paper가 꺼져 있거나 토큰 파일·응답에 문제가 있으면 같은 로컬 ID와 같은 효과로 재시도합니다. 재시도 간격은 최대 60초까지 늘어납니다. 먼저 오래된 대기 이벤트를 처리합니다.
-- 종료는 수신기 창에서 **Ctrl+C**입니다. 정상 종료 후 다음 실행은 SQLite 미전달 이벤트를 이어서 처리합니다. 컴퓨터를 다시 켠 뒤에는 Paper와 수신기를 각각 다시 실행하세요.
+- 전달을 명시적으로 활성화한 경우에만, Paper가 꺼져 있거나 토큰 파일·응답에 문제가 있으면 같은 로컬 ID와 같은 효과로 재시도합니다. 재시도 간격은 최대 60초까지 늘어납니다. 확인된 매핑으로 만들어진 이벤트 안에서 오래된 순으로 처리합니다.
+- 종료는 수신기 창에서 **Ctrl+C**입니다. 다음 실행도 전달 활성화 옵션과 일치하는 확인 파일이 있어야 승인된 미전달 이벤트를 이어서 처리합니다. 기본 재실행은 모든 전달을 보류합니다. 컴퓨터를 다시 켠 뒤에는 Paper와 수신기를 각각 다시 실행하세요.
 - 수신기를 동시에 두 개 실행하지 마세요. `receiver.lock`으로 중복 프로세스를 차단합니다. 잠금이 남으면 모든 수신기가 종료됐음을 확인한 뒤에만 `bridge\.local\receiver.lock`을 삭제합니다. OAuth의 `tokens.dat.lock`과는 다른 잠금입니다.
 
 ### 연결·토큰 갱신과 복구 범위
@@ -200,7 +202,7 @@ if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII br
 
 Socket.IO 자체의 자동 재연결을 끄고, 연결 중단·연결/구독 시간 초과·일시 API 오류 시 지수 간격으로 **새 URL·새 세션·새 구독**을 만듭니다. Access Token 만료 60초 전에는 연결을 정리하고 기존 OAuth 함수를 통해 갱신 후 새 세션을 만듭니다. REST API 401은 갱신 후 한 번만 재요청합니다. 갱신 실패·저장 실패·권한 취소는 중단하므로, 반복 강제 재시도하지 말고 원인 해결 후 다시 OAuth 로그인하세요. 수신기 실행 중 별도로 `oauth.py login/refresh`를 실행하지 마세요.
 
-`bridge\.local\donations.sqlite3`에는 로컬 랜덤 ID, 선택된 효과, 대기/완료/제외 상태, 재시도 정보와 대상 채널의 해시만 저장합니다. 후원자 ID·닉네임·메시지·금액 원문·OAuth 토큰·세션 URL은 저장하지 않습니다. Windows에서는 사용자 전용 폴더에 보관하고 공유·공용 동기화 폴더는 피하세요. DB는 개인정보 원문을 담지 않는 로컬 처리 기록이며 DPAPI 암호화 파일은 아닙니다. Linux는 소유자 전용 권한을 적용합니다. SQLite 트랜잭션과 FULL 동기화를 사용하며 룰렛 결과는 전달 전에 한 번만 결정해 저장합니다.
+`bridge\.local\donations.sqlite3`에는 로컬 랜덤 ID, 선택된 효과, 대기/완료/제외 상태, 재시도 정보, 대상 채널과 매핑의 해시만 저장합니다. 후원자 ID·닉네임·메시지·금액 원문·OAuth 토큰·세션 URL은 저장하지 않습니다. Windows에서는 사용자 전용 폴더에 보관하고 공유·공용 동기화 폴더는 피하세요. DB는 개인정보 원문을 담지 않는 로컬 처리 기록이며 DPAPI 암호화 파일은 아닙니다. Linux는 소유자 전용 권한을 적용합니다. SQLite 트랜잭션과 FULL 동기화를 사용하며 룰렛 결과는 전달 전에 한 번만 결정해 저장합니다.
 
 **보장할 수 없는 부분:**
 - 공식 후원 메시지에는 고유 후원 ID가 명시돼 있지 않습니다. 같은 내용이 치지직에서 두 번 수신되면 서로 다른 로컬 이벤트가 됩니다. 금액·닉네임·메시지 해시로 임의 중복 제거하지 않습니다.
@@ -233,3 +235,68 @@ npm ci --prefix tests/socketio2 --ignore-scripts
 병합 전 상태 경합·장애·토큰 전달 경로 리뷰와 남은 Paper 저장 한계는 [코드 리뷰 기록](docs/chzzk-donations-review.md)에 정리했습니다. 수신 메시지는 wire 순서로 처리하며, 저장 실패·권한 취소는 후속 disconnect로 덮지 않고 중단합니다. Paper로 보내는 loopback 요청은 환경 HTTP 프록시와 리디렉션을 사용하지 않습니다. 금액 JSON에 같은 키가 두 번 있으면 실행을 거부합니다.
 
 Paper 저장 안정성 후속 개선: [SQLite 수신 응답·UNCERTAIN 처리·이전 YAML 이관·백업 안내](docs/paper-event-durability.md). 플러그인 Java 자동 테스트 16개를 추가했습니다. 기존 리뷰 기록의 Paper 미수정 항목은 해당 후속 개선 전 상태를 설명합니다.
+
+
+## 원/치즈 금액 대응 검증과 방송 전 안전 테스트
+
+### 확인한 사실과 미확정 사항
+
+[공식 DONATION 메시지 명세](https://chzzk.gitbook.io/chzzk/chzzk-api/session#message-event-subscribe-donation)는 `payAmount`를 **String / 후원 금액 (원)**, `donationText`를 후원 메시지로 설명합니다. 확인한 명세에는 치즈 개수 필드나 원/치즈 환산식이 없습니다. 따라서 다음 네 규칙의 원 대응은 모두 **미확정**입니다. 숫자가 같다는 이유만으로 동일하다고 적용하지 않습니다.
+
+| 기존 게임 규칙 | 명령어·효과 | 검증된 공식 payAmount 대응 |
+|---|---|---|
+| 1,000치즈 | !버프·!이동·!밥·!다곡, 명령어 없으면 기존 4종 룰렛 | 미확정 |
+| 2,000치즈 | !몹·!디버프, 명령어 필수 | 미확정 |
+| 5,000치즈 | !삭제·!랜덤즉사·!지상, 명령어 필수 | 미확정 |
+| 30,000치즈 | 메시지 무관 기존 즉사 효과 | 미확정 |
+
+금액 문자열의 정수 형식·명령어 선택·룰렛 후보·저장/재시도는 모의 테스트로 확인할 수 있습니다. 실제 후원에서 선택한 치즈 개수와 수신 `payAmount`의 대응, 후원 유형별 실제 메시지와 로그인/권한/장시간 수신 동작은 실환경 확인이 필요합니다. 이번 작업에서는 로그인·실제 후원 결제·금액 환산 확정을 하지 않았습니다. 게임 효과·랜덤 확률·3초 간격도 변경하지 않았습니다.
+
+### Windows에서 계정 없이 모의 데이터 넣기
+
+Python 3.10 이상을 준비하고 저장소 루트에서 실행합니다. 이 도구는 Python 표준 라이브러리만 사용합니다. OAuth 환경변수, 토큰 파일, Paper 서버, 네트워크 연결이 필요 없습니다.
+
+```powershell
+python bridge/donation_check.py --input tests/fixtures/donations.json --amount-map tests/fixtures/simulation-amount-map.json
+```
+
+- `donations.json`은 공식 필드 모양으로 만든 **가상 데이터 10건**이며 실제 후원 기록이 아닙니다.
+- `simulation-amount-map.json`의 동일 숫자 매핑은 **테스트 가정**일 뿐이며 운영용으로 복사하지 마세요.
+- 출력은 `SIMULATION_ONLY_NOT_REAL_AMOUNT_VERIFICATION` 표시, 매핑 해시와 금액별 선택 효과입니다. 후원자 ID·닉네임·메시지는 출력하지 않습니다.
+- 임시 SQLite DB만 사용하고 지웁니다. Paper로 보내거나 로그인하지 않으며 운영 수신함·실검증 확인 파일도 만들지 않습니다.
+- 결과 `pending`은 임시 모의 DB 안의 변환 결과로, 실제 Paper 등록을 뜻하지 않습니다.
+- 직접 모의 데이터를 만들려면 객체 배열 JSON에 `channelId="simulation-channel"`, `donationType="CHAT"`, 문자열 `payAmount`, 문자열 `donationText`를 넣습니다. 다른 가상 채널이면 `--channel-id`로 지정합니다. 메시지에 실제 개인정보나 인증 정보를 넣지 마세요.
+- 기존 `python bridge/bridge.py ...` 로컬 송신기는 그대로 유지됩니다. 이 도구는 실제 Paper에 보낼 수 있는 별도 관리용 시뮬레이터이므로 운영 서버에서 위험 효과를 시험하지 마세요.
+
+전체 모의 테스트는 위 가상환경 설치 후 다음 명령으로 실행합니다. 실제 Socket.IO 호환성 검사까지 실행하려면 앞서 안내한 테스트용 Node.js 설치도 필요합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+### 실검증 전에는 전달을 켜지 마세요
+
+실시간 수신기의 기본값은 관찰 모드입니다. 매핑 파일이 비어 있지 않아도 **신규 효과 선택·과거 대기열 전달을 모두 차단**합니다. 실제 네트워크 관찰은 OAuth가 필요하지만, 위 오프라인 검증은 필요 없습니다.
+
+향후 방송인이 통제된 환경에서 **매핑의 각 항목을 실제로 확인한 후에만**, Git 제외 경로 `bridge\.local\amount-verification.json`에 아래 형식의 운영자 확인 기록을 작성할 수 있습니다. 이 단계는 이번 작업에서 수행하지 않았습니다. API가 발급하는 인증서가 아니라 사용자의 직접 확인 선언입니다. 도구가 실제 검증 여부를 증명하지 못합니다.
+
+```json
+{
+  "version": 1,
+  "channelId": "ACTUAL_BROADCASTER_CHANNEL_ID",
+  "mappingSha256": "SHA256_OF_THE_EXACT_MAPPING",
+  "confirmedByOperator": false
+}
+```
+
+위 템플릿의 `false`는 전달을 허용하지 않습니다. 실제 확인 전에는 바꾸지 마세요. 채널 ID와 매핑 해시는 정확히 일치해야 하며, 매핑을 바꾸면 기존 확인 파일은 거부됩니다. 해시는 위 오프라인 검증 출력에서 확인할 수 있지만 **해시를 얻거나 모의 테스트에 통과한 것만으로 실검증이 되는 것은 아닙니다.** JSON은 UTF-8(Windows BOM 포함 가능) 또는 ASCII로 저장합니다.
+
+직접 검증을 마쳐 유효한 확인 파일을 준비한 후에만 기존 receiver 명령 뒤에 두 옵션을 함께 붙입니다.
+
+```powershell
+--enable-game-delivery --verification-file bridge\.local\amount-verification.json
+```
+
+옵션만 있거나, 확인이 false이거나, 채널·매핑이 다르면 OAuth 호출 전에 실행을 거부합니다. 비밀키·토큰은 이 파일에 넣지 마세요. 검증 파일을 추가한다고 기본 관찰 실행이 자동으로 활성화되지는 않습니다.
+
+**이전 대기열:** 신규 수신 기록에는 선택 당시 매핑 해시를 붙입니다. 이전 버전의 해시 없는 이벤트나 다른 매핑으로 만든 대기 이벤트는 활성화 후에도 보류합니다. 대기 건수 중 보류 건수를 따로 표시합니다. 임의로 해시를 채우거나 새 ID로 바꿔 재전송하지 말고, 수신기와 Paper를 정지한 상태에서 백업·기록을 검토하는 별도 복구 작업으로 처리하세요. 모의 테스트는 실시간 전달의 이 차단을 해제하지 않습니다.

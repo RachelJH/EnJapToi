@@ -36,7 +36,7 @@ class ReceiverTests(unittest.TestCase):
         self.path = Path(self.tmp.name) / 'private' / 'inbox.sqlite3'
         self.journal = r.Journal(self.path)
         self.addCleanup(lambda: self.journal.close())
-        self.intake = r.Intake(self.journal, 'channel', {'1000':1000})
+        self.intake = r.Intake(self.journal, 'channel', {'1000':1000}, allow_game_events=True)
         self.payload = {'channelId':'channel','donationType':'CHAT','payAmount':'1000',
                         'donationText':'!밥 secret-message','donatorNickname':'secret-nickname',
                         'donatorChannelId':'secret-donor'}
@@ -377,7 +377,7 @@ class SocketIO2Integration(unittest.TestCase):
             token=Path(tmp)/'token';token.write_text('test-paper-token')
             journal=r.Journal(Path(tmp)/'data/inbox.sqlite3')
             self.addCleanup(journal.close)
-            intake=r.Intake(journal,'test-channel',{'1000':1000})
+            intake=r.Intake(journal,'test-channel',{'1000':1000},allow_game_events=True)
             timer=threading.Timer(15,stop.set);timer.start()
             def watch():
                 while not stop.wait(.02):
@@ -386,7 +386,7 @@ class SocketIO2Integration(unittest.TestCase):
             out=io.StringIO()
             try:
                 with contextlib.redirect_stdout(out),contextlib.redirect_stderr(out):
-                    r.run(LocalApi(Tokens()),intake,journal,token,paper.server_port,stop,factory,tick=.02)
+                    r.run(LocalApi(Tokens()),intake,journal,token,paper.server_port,stop,factory,tick=.02,delivery_enabled=True)
             finally:
                 stop.set();timer.cancel();watcher.join(2)
             self.assertEqual(journal.counts(),{'done':2},out.getvalue())

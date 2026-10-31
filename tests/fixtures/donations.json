@@ -1,0 +1,92 @@
+[
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "1000",
+    "donationText": "!버프",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "1000",
+    "donationText": "!이동",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "1000",
+    "donationText": "!밥",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "1000",
+    "donationText": "!다곡",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "2000",
+    "donationText": "!몹",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "2000",
+    "donationText": "!디버프",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "5000",
+    "donationText": "!삭제",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "5000",
+    "donationText": "!랜덤즉사",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "5000",
+    "donationText": "!지상",
+    "emojis": {}
+  },
+  {
+    "donationType": "CHAT",
+    "channelId": "simulation-channel",
+    "donatorChannelId": "fictional-donor",
+    "donatorNickname": "가상후원자",
+    "payAmount": "30000",
+    "donationText": "",
+    "emojis": {}
+  }
+]
