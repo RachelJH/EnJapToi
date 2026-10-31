@@ -52,4 +52,19 @@ class BridgeEndpointTest {
       } finally {server.stop(0);}
     }
   }
+  @Test void staleReceiverCannotDeliverToRestartedServer() throws Exception {
+    try(EventStore store=new EventStore(temp.resolve("events.sqlite3"))) {
+      HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+      server.createContext("/event",new BridgeEndpoint("private-token","new-instance",store::enqueue));server.start();
+      try {
+        HttpURLConnection c=(HttpURLConnection)new URL("http://127.0.0.1:"+server.getAddress().getPort()+"/event").openConnection(Proxy.NO_PROXY);
+        c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("X-EJT-Token","private-token");c.setRequestProperty("X-EJT-Instance","old-instance");
+        try {try(var out=c.getOutputStream()){out.write("stale-id\tbread".getBytes(StandardCharsets.UTF_8));}assertEquals(409,c.getResponseCode());}
+        finally{c.disconnect();}
+        assertEquals(0,store.count("PENDING"));
+        assertEquals(new Response(200,"queued"),post(server,"manual-test\tbread","private-token"));
+      } finally {server.stop(0);}
+    }
+  }
+
 }

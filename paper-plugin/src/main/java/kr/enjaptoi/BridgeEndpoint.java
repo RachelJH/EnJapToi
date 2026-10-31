@@ -12,13 +12,19 @@ final class BridgeEndpoint implements HttpHandler {
   }
   private final byte[] token;
   private final Receiver receiver;
-  BridgeEndpoint(String token,Receiver receiver){this.token=token.getBytes(StandardCharsets.UTF_8);this.receiver=receiver;}
+  private final String instance;
+  BridgeEndpoint(String token,Receiver receiver){this(token,null,receiver);}
+  BridgeEndpoint(String token,String instance,Receiver receiver){this.token=token.getBytes(StandardCharsets.UTF_8);this.instance=instance;this.receiver=receiver;}
   @Override public void handle(HttpExchange exchange) throws IOException {
     try(exchange) {
       if(!"/event".equals(exchange.getRequestURI().getPath())){respond(exchange,404,"not found");return;}
       if(!"POST".equals(exchange.getRequestMethod())){respond(exchange,405,"method not allowed");return;}
       String supplied=exchange.getRequestHeaders().getFirst("X-EJT-Token");
       if(supplied==null || !MessageDigest.isEqual(token,supplied.getBytes(StandardCharsets.UTF_8))){respond(exchange,401,"unauthorized");return;}
+      String sentInstance=exchange.getRequestHeaders().getFirst("X-EJT-Instance");
+      if(sentInstance!=null && (instance==null || !MessageDigest.isEqual(instance.getBytes(StandardCharsets.UTF_8),sentInstance.getBytes(StandardCharsets.UTF_8)))){
+        respond(exchange,409,"server_changed");return;
+      }
       byte[] bytes=exchange.getRequestBody().readNBytes(4097);
       if(bytes.length>4096){respond(exchange,400,"invalid event");return;}
       String[] parts=new String(bytes,StandardCharsets.UTF_8).trim().split("\\t",-1);

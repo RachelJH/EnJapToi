@@ -12,6 +12,7 @@ import queue
 import re
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
@@ -189,9 +190,9 @@ class Intake:
             return False
         target = self.mapping.get(amount)
         effect = bridge.select_event(target, text) if target is not None else None
-        # Choose roulette exactly once, then persist BEFORE any Paper request.
-        self.journal.add(effect, mapping_digest(self.mapping) if effect else None)
-        return effect is not None
+        # Choose roulette once. Managed mode sends directly; Paper commits before ACK.
+        receipt = self.journal.add(effect, mapping_digest(self.mapping) if effect else None)
+        return effect is not None and receipt is not None
 
 
 def deliver_one(journal, token_file, port=18765, now=None, send=bridge.deliver, mapping_hash=None):
@@ -214,6 +215,45 @@ def deliver_one(journal, token_file, port=18765, now=None, send=bridge.deliver, 
         return result
     journal.retry(event_id, attempts + 1, now)
     return 'retry'
+
+
+class PaperReceipts:
+    """Managed mode: no disk outbox. Paper alone owns accepted event durability."""
+    def __init__(self, token_file, port, instance, lifetime, send=bridge.deliver):
+        self.token_file, self.port, self.instance = token_file, port, instance
+        self.lifetime, self.send = lifetime, send
+        self.lock = threading.Lock()
+        self.totals = {'done':0, 'ignored':0, 'dropped':0}
+
+    def add(self, effect, mapping_hash=None):
+        if not self.lifetime.alive():
+            return None
+        if effect is None:
+            with self.lock: self.totals['ignored'] += 1
+            return None
+        event_id = secrets.token_urlsafe(24)
+        for _ in range(2):
+            if not self.lifetime.alive():
+                return None
+            try:
+                token = Path(self.token_file).read_text(encoding='utf-8').strip()
+                if not token:
+                    raise ValueError()
+                result = self.send(effect, event_id, token, self.port, instance=self.instance)
+                if result in ('queued', 'duplicate'):
+                    with self.lock: self.totals['done'] += 1
+                    return event_id
+            except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+                pass
+        # No delayed/offline replay: a lost ACK may already be safely stored in Paper.
+        with self.lock: self.totals['dropped'] += 1
+        return None
+
+    def pending(self, mapping_hash=None): return None
+    def counts(self):
+        with self.lock: return dict(self.totals)
+    def held_count(self, approved_hash): return 0
+    def close(self): pass
 
 
 class Tokens:
@@ -444,7 +484,7 @@ class Session:
 
 
 def run(api, intake, journal, token_file, port=18765, stop=None,
-        factory=socket_client, tick=0.5, delivery_enabled=False):
+        factory=socket_client, tick=0.5, delivery_enabled=False, lifetime=None):
     stop = stop or threading.Event()
     if not delivery_enabled:
         intake.allow_game_events = False
@@ -456,7 +496,7 @@ def run(api, intake, journal, token_file, port=18765, stop=None,
     verified = False
     announced = False
     try:
-        while not stop.is_set():
+        while not stop.is_set() and (lifetime is None or lifetime.alive()):
             now = time.monotonic()
             try:
                 if not verified and now >= retry_at:
@@ -496,7 +536,7 @@ def run(api, intake, journal, token_file, port=18765, stop=None,
                 counts = journal.counts()
                 held = journal.held_count(approved_hash) if delivery_enabled else counts.get('pending', 0)
                 print('수신함 집계:', '대기', counts.get('pending', 0),
-                      '(그중 보류', held, ')', '완료', counts.get('done', 0), '제외', counts.get('ignored', 0))
+                      '(그중 보류', held, ')', '완료', counts.get('done', 0), '제외', counts.get('ignored', 0), '접수 미확인', counts.get('dropped', 0))
                 report_at = now + 60
             stop.wait(tick)
     finally:
@@ -507,6 +547,7 @@ def run(api, intake, journal, token_file, port=18765, stop=None,
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Official CHZZK donation receiver; no upstream replay guarantee')
     ap.add_argument('--config', type=Path)
+    ap.add_argument('--managed-stdin', action='store_true', help='Paper-owned stdin lifetime; standalone live receiver is disabled')
     ap.add_argument('--channel-id', required=True, help='Authorized broadcaster channel ID (not nickname)')
     ap.add_argument('--amount-map', type=Path, required=True, help='Explicit KRW-string -> existing game amount JSON; {} observes only')
     ap.add_argument('--donation-type', choices=['CHAT', 'VIDEO'], default='CHAT')
@@ -519,27 +560,32 @@ def main(argv=None):
     try:
         if not args.channel_id or len(args.channel_id) > 128 or not 1 <= args.port <= 65535:
             raise ReceiverError('채널 또는 포트 설정이 올바르지 않습니다.')
+        if not args.managed_stdin or sys.stdin.isatty() or not os.environ.get('EJT_SERVER_INSTANCE'):
+            raise ReceiverError('실시간 수신기는 Paper가 자동 실행해야 합니다. 단독 수집은 차단됩니다.')
+        if __package__:
+            from .lifecycle import ParentLifetime
+        else:
+            from lifecycle import ParentLifetime
+        lifetime = ParentLifetime(sys.stdin.buffer)
         mapping = amount_map(args.amount_map)
         enabled = authorize_delivery(args.enable_game_delivery, args.verification_file, args.channel_id, mapping)
         client_id, secret = oauth.credentials(args.config)
         import socketio  # Fail before entering reconnect loop when dependencies are missing.
         del socketio
-        # A separate process lock prevents two receivers duplicating the same stream/outbox.
-        with oauth.TokenStore(oauth.LOCAL / 'receiver').lock():
-            journal = Journal(oauth.LOCAL / 'donations.sqlite3')
-            journal.bind_channel(args.channel_id)
-            intake = Intake(journal, args.channel_id, mapping, args.donation_type, allow_game_events=enabled)
-            print('후원 수신 시작. 금액 매핑은 사용자 설정이며 치즈 대응 검증 결과가 아닙니다.')
-            if not enabled:
-                print('관찰 모드: 신규 후원 변환과 기존 대기 이벤트의 Paper 전달을 모두 차단합니다.')
-            else:
-                print('사용자 실검증 확인에 따라 전달을 활성화했습니다. 확인은 API가 보증한 환산율이 아닙니다.')
-            run(Api(Tokens(client_id, secret, oauth.TokenStore())), intake, journal, args.token_file, args.port, delivery_enabled=enabled)
+        journal = PaperReceipts(args.token_file, args.port, os.environ['EJT_SERVER_INSTANCE'], lifetime)
+        intake = Intake(journal, args.channel_id, mapping, args.donation_type, allow_game_events=enabled)
+        print('Paper 연동 수신 시작. 서버 종료 시 수신 프로세스도 종료합니다.')
+        if not enabled:
+            print('관찰 모드: 금액 미확정 상태의 게임 효과 선택·전달을 차단합니다.')
+        else:
+            print('확인된 매핑으로 Paper에 접수된 이벤트만 보존합니다. 미접수 후원은 재시작 후 재생하지 않습니다.')
+        run(Api(Tokens(client_id, secret, oauth.TokenStore())), intake, journal, args.token_file, args.port,
+            delivery_enabled=enabled, lifetime=lifetime)
     except (ReceiverError, oauth.OAuthError) as e:
         print(str(e))
         return 1
     except KeyboardInterrupt:
-        print('수신 종료. 저장된 미전달 이벤트는 다음 실행에서 재시도합니다.')
+        print('수신 종료. Paper에 정상 접수된 대기열은 서버 DB에 보존됩니다.')
         return 0
     except ImportError:
         print('가상환경에 bridge/requirements.txt 의존성을 설치하세요.')

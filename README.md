@@ -64,7 +64,7 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 
 ## 치지직 OAuth 인증 (친구 Windows PC)
 
-`oauth.py`는 **로그인·토큰 발급·갱신만** 처리합니다. 실제 후원을 전달하려면 아래 실시간 수신기를 별도로 실행해야 합니다. Paper 26.3 빌드 230과 Java 25, 기존 게임 규칙에는 변화가 없습니다. 인증 단계에서는 Paper 서버를 켜지 않아도 됩니다.
+`oauth.py`는 **로그인·토큰 발급·갱신만** 처리합니다. 최초 인증을 마치면 아래 설정에 따라 Paper가 수신기를 자동 실행·종료합니다. Paper 26.3 빌드 230과 Java 25, 기존 게임 규칙에는 변화가 없습니다. 인증 단계에서는 Paper 서버를 켜지 않아도 됩니다.
 
 ### 1. 준비
 
@@ -120,7 +120,7 @@ Remove-Item Env:CHZZK_CLIENT_ID, Env:CHZZK_CLIENT_SECRET -ErrorAction SilentlyCo
 - **18766 포트 사용 중:** 다른 OAuth 도구를 종료하고 다시 시도합니다. 등록된 콜백 포트는 임의로 변경하지 않습니다.
 - **대기 시간 만료·state 오류:** 같은 실행에서 열린 브라우저 탭으로 인증해야 합니다. 이전 탭을 닫고 `login`을 새로 실행합니다.
 - **인증 거부·토큰 응답 오류:** Client ID/Secret, 앱 상태, 등록된 권한과 콜백 주소를 확인한 뒤 다시 로그인합니다. 원본 오류 응답·인증 URL·브라우저 주소를 공개하지 마세요.
-- **잠금 파일 잔존:** 모든 `oauth.py` 작업이 종료됐는지 확인한 경우에만 `bridge\.local\tokens.dat.lock`을 삭제합니다. 진행 중에는 삭제하지 마세요.
+- **OAuth 잠금:** 잠금 파일은 남아 있어도 정상입니다. OS 잠금을 사용하므로 프로세스 종료 시 해제됩니다. 실행 중 잠금 파일을 삭제하지 마세요. 토큰 갱신 도중 강제 종료됐다면 토큰 사용 여부가 불명확할 수 있어 재로그인이 필요할 수 있습니다.
 - **Windows 복호화 실패:** 같은 Windows 사용자에서 실행했는지 확인하고, 필요하면 다시 로그인합니다. 평문 저장으로 우회하지 않습니다.
 - 콜백 접근 로그, 요청·응답 본문, 인증 코드, 토큰과 후원자 정보는 기록하지 않습니다. 지원 요청 시에는 화면의 일반 오류 메시지만 공유하세요. 토큰 폴더와 클라이언트 파일을 Git에 강제로 추가하지 마세요.
 - 공식 API는 HTTPS 및 TLS 검증을 유지하고 토큰 요청의 HTTP 리디렉션을 따라가지 않습니다. 네트워크 제한이 있다면 브라우저 인증에 `chzzk.naver.com`, 토큰 API에 `openapi.chzzk.naver.com` 접근이 필요합니다. 로그인 중 추가 브라우저 인증 도메인은 실제 흐름에서 확인해야 합니다.
@@ -137,7 +137,7 @@ Remove-Item Env:CHZZK_CLIENT_ID, Env:CHZZK_CLIENT_SECRET -ErrorAction SilentlyCo
 
 ## 공식 치지직 실시간 후원 수신 (Windows PC 한 대)
 
-친구 PC에서 **Paper 서버 창과 수신기 PowerShell 창을 각각 하나씩** 실행합니다. 브라우저 OAuth와 수신기도 같은 Windows 사용자 계정을 사용합니다. Paper는 기존처럼 Java 25 / 빌드 230으로 실행하며 게임 규칙은 바꾸지 않습니다. 실제 계정·후원을 사용한 검증은 아직 수행하지 않았습니다.
+친구 PC에서 **기존 Paper 서버 실행 파일 하나만** 실행합니다. 처음 한 번 아래 설정과 OAuth 인증을 마치면 별도의 수신기 창을 열거나 닫지 않습니다. 브라우저 OAuth와 서버는 같은 Windows 사용자 계정을 사용합니다. Paper는 기존처럼 Java 25 / 빌드 230으로 실행하며 게임 규칙은 바꾸지 않습니다. 실제 계정·후원을 사용한 검증은 아직 수행하지 않았습니다.
 
 ### 설치와 로그인
 
@@ -177,24 +177,40 @@ if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII br
 
 이 설정을 선택하면 `payAmount="1000"`에 기존 1,000치즈 게임 규칙을 적용하겠다는 사용자 설정입니다. 실검증 전에는 `{}`를 유지하세요. 매핑에 없는 금액, 선택하지 않은 후원 유형, 규칙에 맞지 않는 명령어는 `제외`로 집계합니다. 기존 `select_event()`를 그대로 사용하므로 명령어 우선순위와 룰렛·즉사 규칙도 동일합니다.
 
-### 실행
+### 한 번 설정한 뒤 Paper만 실행
 
-1. Paper 서버를 실행하고 `ejt status`로 플러그인 활성화를 확인합니다.
-2. 아래 경로와 채널 ID를 실제 값으로 바꿉니다. 토큰 **파일 경로**를 지정하며 파일 내용은 복사하지 않습니다.
+업데이트 전에는 구버전의 별도 수신기를 완전히 종료하세요. 구버전과 신버전의 동시 실행은 지원하지 않으며 OAuth 잠금 방식도 바뀌었습니다. 아래 설정을 마친 뒤부터는 Paper만 실행·종료합니다.
 
-```powershell
-.\.venv\Scripts\python.exe bridge/receiver.py --channel-id "방송인의_실제_채널_ID" --amount-map bridge\.local\amount-map.json --token-file "C:\MinecraftServer\plugins\EnJapToi\bridge-token.txt"
+1. 위 Python 가상환경·최초 OAuth 절차를 마칩니다. 게임 금액이 미확정이면 매핑은 `{}`, 전달 활성화는 `false`로 둡니다.
+2. Paper를 끈 상태에서 `plugins/EnJapToi/config.yml`에 아래 블록을 추가합니다. 이전 버전 config.yml에는 자동 추가되지 않습니다. `C:/EnJapToi`를 실제 저장소 경로로 바꾸고 방송인 채널 ID를 입력합니다. Windows 경로는 `/`를 쓰면 YAML 이스케이프 문제를 피할 수 있습니다.
+
+```yaml
+receiver:
+  enabled: true
+  python: 'C:/EnJapToi/.venv/Scripts/python.exe'
+  script: 'C:/EnJapToi/bridge/receiver.py'
+  channel-id: 'ACTUAL_BROADCASTER_CHANNEL_ID'
+  donation-type: CHAT
+  amount-map: 'C:/EnJapToi/bridge/.local/amount-map.json'
+  client-config: 'C:/EnJapToi/bridge/.local/client.json'
+  enable-game-delivery: false
+  verification-file: 'C:/EnJapToi/bridge/.local/amount-verification.json'
 ```
 
-위 실행은 관찰 전용이며 게임에 전달하지 않습니다. 아래 금액 검증 절차를 마친 뒤에만 전달 활성화를 검토하세요.
+Client ID/Secret은 앞서 설명한 Git 제외 `client.json`에만 저장하고, Paper config에는 **경로만** 적습니다. 환경변수를 사용하는 경우 `client-config: ''`로 두고 그 환경변수를 가진 창에서 Paper를 실행합니다. 값은 로그·GitHub에 올리지 마세요. 최초 OAuth는 별도 한 번 필요하며, 서버가 자동 로그인하거나 동의 화면을 승인하지 않습니다.
 
-환경변수 대신 클라이언트 설정 파일을 사용한다면 `--config bridge\.local\client.json`을 추가합니다. 기본 수신 대상은 `donationType=CHAT`입니다. 영상 후원도 별도로 검증하려면 `--donation-type VIDEO`를 명시합니다. 한 실행에서 선택한 한 유형만 처리하며, 검증 없이 영상 후원을 게임에 적용하지 마세요.
+3. 기존 서버 배치 파일을 그대로 실행합니다. 예:
 
-- `공식 후원 구독 확인 완료`가 표시돼야 구독 확인을 받은 상태입니다. 분당 대기·완료·제외 건수를 출력합니다.
-- `Paper 전달: queued`는 Paper 대기열 등록, `duplicate`는 같은 로컬 ID가 이미 등록됐음을 뜻합니다. **게임 내 실행 완료를 뜻하지 않습니다.** Yirue가 오프라인이면 기존 플러그인 대기열에 남습니다.
-- 전달을 명시적으로 활성화한 경우에만, Paper가 꺼져 있거나 토큰 파일·응답에 문제가 있으면 같은 로컬 ID와 같은 효과로 재시도합니다. 재시도 간격은 최대 60초까지 늘어납니다. 확인된 매핑으로 만들어진 이벤트 안에서 오래된 순으로 처리합니다.
-- 종료는 수신기 창에서 **Ctrl+C**입니다. 다음 실행도 전달 활성화 옵션과 일치하는 확인 파일이 있어야 승인된 미전달 이벤트를 이어서 처리합니다. 기본 재실행은 모든 전달을 보류합니다. 컴퓨터를 다시 켠 뒤에는 Paper와 수신기를 각각 다시 실행하세요.
-- 수신기를 동시에 두 개 실행하지 마세요. `receiver.lock`으로 중복 프로세스를 차단합니다. 잠금이 남으면 모든 수신기가 종료됐음을 확인한 뒤에만 `bridge\.local\receiver.lock`을 삭제합니다. OAuth의 `tokens.dat.lock`과는 다른 잠금입니다.
+```powershell
+java -Xms1G -Xmx2G -jar paper-26.3-230.jar --nogui
+```
+
+Paper가 플러그인을 활성화하면 Python 수신기도 시작합니다. 기본 `receiver.enabled: false`는 미설정 PC의 잘못된 실행을 막기 위한 값이며, 위 설정 후에는 자동으로 시작합니다. `enable-game-delivery: false` 상태에서도 서버가 켜져 있는 동안 공식 후원 구독·관찰은 가능하지만 게임 효과 선택·전달은 막습니다.
+
+4. 콘솔에서 `ejt status`의 `receiver=true`와 `plugins/EnJapToi/receiver.log`의 `공식 후원 구독 확인 완료`를 확인합니다. 프로세스 생존만으로 인증·구독 성공을 뜻하지는 않습니다. 실패하면 로그의 일반 진단과 경로·권한을 확인한 후 서버를 재시작합니다.
+5. 서버 콘솔 `stop` 또는 기존 종료 방법으로 종료합니다. JVM이 강제 종료돼도 부모 파이프의 EOF를 감시하는 Python 스레드가 수신기 전체를 끝냅니다. 다음 Paper 실행에서는 새 수신기·새 세션을 사용합니다. `receiver.py`의 독립 실행은 차단되며 별도 수신기를 백그라운드로 띄우지 마세요.
+
+상세 동작과 한계는 [서버 연동 수명주기](docs/paper-receiver-lifecycle.md)를 확인하세요. 최초 인증 이후에는 친구가 수신기 실행·종료 명령을 따로 입력하지 않습니다. 설정 변경은 서버 재시작 후 반영합니다. 기본 `donation-type: CHAT`를 유지하며, 영상 후원은 별도 검증 후에만 `VIDEO`로 선택하세요.
 
 ### 연결·토큰 갱신과 복구 범위
 
@@ -202,11 +218,13 @@ if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII br
 
 Socket.IO 자체의 자동 재연결을 끄고, 연결 중단·연결/구독 시간 초과·일시 API 오류 시 지수 간격으로 **새 URL·새 세션·새 구독**을 만듭니다. Access Token 만료 60초 전에는 연결을 정리하고 기존 OAuth 함수를 통해 갱신 후 새 세션을 만듭니다. REST API 401은 갱신 후 한 번만 재요청합니다. 갱신 실패·저장 실패·권한 취소는 중단하므로, 반복 강제 재시도하지 말고 원인 해결 후 다시 OAuth 로그인하세요. 수신기 실행 중 별도로 `oauth.py login/refresh`를 실행하지 마세요.
 
-`bridge\.local\donations.sqlite3`에는 로컬 랜덤 ID, 선택된 효과, 대기/완료/제외 상태, 재시도 정보, 대상 채널과 매핑의 해시만 저장합니다. 후원자 ID·닉네임·메시지·금액 원문·OAuth 토큰·세션 URL은 저장하지 않습니다. Windows에서는 사용자 전용 폴더에 보관하고 공유·공용 동기화 폴더는 피하세요. DB는 개인정보 원문을 담지 않는 로컬 처리 기록이며 DPAPI 암호화 파일은 아닙니다. Linux는 소유자 전용 권한을 적용합니다. SQLite 트랜잭션과 FULL 동기화를 사용하며 룰렛 결과는 전달 전에 한 번만 결정해 저장합니다.
+자동 모드에서는 Python의 별도 디스크 후원 대기열을 만들지 않습니다. 서버가 살아 있는 동안 선택한 효과와 로컬 ID로 Paper에 접수하고, 접수 확인이 불명확하면 같은 ID·효과로 즉시 한 번만 더 시도합니다. 이후 별도 저장·다음 실행 재생은 하지 않습니다. `queued` 또는 `duplicate`로 접수된 항목의 보존은 Paper의 `events.sqlite3`가 담당합니다. 응답이 유실됐더라도 Paper가 이미 저장했을 수 있으므로 `접수 미확인` 집계가 곧 실제 유실 확정은 아닙니다.
+
+서버 종료 후 후원을 수집·저장하지 않으며, 이전 Python 수신함 `donations.sqlite3`도 자동 재생하지 않습니다. 이미 Paper에 정상 접수한 대기열은 Yirue 오프라인·정상/강제 재시작 후에도 기존 SQLite 방식으로 유지합니다. 금액 확인 없이 게임 효과를 선택하지 않는 기존 차단은 유지합니다.
 
 **보장할 수 없는 부분:**
 - 공식 후원 메시지에는 고유 후원 ID가 명시돼 있지 않습니다. 같은 내용이 치지직에서 두 번 수신되면 서로 다른 로컬 이벤트가 됩니다. 금액·닉네임·메시지 해시로 임의 중복 제거하지 않습니다.
-- 로컬 저장 이후 Paper 재시도의 ID는 같게 유지합니다. 하지만 치지직 단계의 완벽한 중복 방지나 단 한 번 실행을 보장하지 않습니다.
+- Paper 재시도는 현재 서버 실행 중 같은 ID·효과로 수행합니다. 접수되지 않은 항목을 디스크에 쌓아 나중에 전달하지 않습니다. 치지직 단계의 완벽한 중복 방지나 단 한 번 실행은 보장하지 않습니다.
 - 연결 중단 중 발생하거나 로컬 저장 전에 유실된 후원을 자동 복구할 공식 이력·재생 API는 확인되지 않았습니다. 세션 목록 90일 조회는 후원 내역 조회가 아닙니다.
 - Paper는 SQLite commit 이후 queued를 반환하고, 재시작 시 불확실한 실행은 UNCERTAIN으로 보류합니다. 월드·게임 효과와 DB를 하나의 트랜잭션으로 만들 수 없어 정확히 한 번 실행은 보장하지 않습니다. [상세 저장·복구 절차](docs/paper-event-durability.md)를 확인하세요.
 - 처리 기록은 자동 삭제하지 않습니다. 파일을 삭제하면 대기 이벤트가 유실될 수 있으므로 임의로 지우지 마세요. 백업은 수신기를 정상 종료한 상태에서 합니다. 실서비스 보존·정리 정책은 후속 작업입니다.
@@ -291,12 +309,14 @@ python bridge/donation_check.py --input tests/fixtures/donations.json --amount-m
 
 위 템플릿의 `false`는 전달을 허용하지 않습니다. 실제 확인 전에는 바꾸지 마세요. 채널 ID와 매핑 해시는 정확히 일치해야 하며, 매핑을 바꾸면 기존 확인 파일은 거부됩니다. 해시는 위 오프라인 검증 출력에서 확인할 수 있지만 **해시를 얻거나 모의 테스트에 통과한 것만으로 실검증이 되는 것은 아닙니다.** JSON은 UTF-8(Windows BOM 포함 가능) 또는 ASCII로 저장합니다.
 
-직접 검증을 마쳐 유효한 확인 파일을 준비한 후에만 기존 receiver 명령 뒤에 두 옵션을 함께 붙입니다.
+직접 검증을 마쳐 유효한 확인 파일을 준비한 후에만 Paper config에서 전달을 활성화합니다. Paper가 내부적으로 대응하는 검증 옵션을 전달합니다. 수신기 독립 실행은 하지 않습니다.
 
-```powershell
---enable-game-delivery --verification-file bridge\.local\amount-verification.json
+```yaml
+receiver:
+  enable-game-delivery: true
+  verification-file: 'C:/EnJapToi/bridge/.local/amount-verification.json'
 ```
 
 옵션만 있거나, 확인이 false이거나, 채널·매핑이 다르면 OAuth 호출 전에 실행을 거부합니다. 비밀키·토큰은 이 파일에 넣지 마세요. 검증 파일을 추가한다고 기본 관찰 실행이 자동으로 활성화되지는 않습니다.
 
-**이전 대기열:** 신규 수신 기록에는 선택 당시 매핑 해시를 붙입니다. 이전 버전의 해시 없는 이벤트나 다른 매핑으로 만든 대기 이벤트는 활성화 후에도 보류합니다. 대기 건수 중 보류 건수를 따로 표시합니다. 임의로 해시를 채우거나 새 ID로 바꿔 재전송하지 말고, 수신기와 Paper를 정지한 상태에서 백업·기록을 검토하는 별도 복구 작업으로 처리하세요. 모의 테스트는 실시간 전달의 이 차단을 해제하지 않습니다.
+**이전 대기열:** 이전 버전의 Python 수신함은 금액 확인 여부와 관계없이 자동으로 가져오지 않습니다. 서버가 꺼진 동안 수집됐을 수 있으므로 새 ID로 재전송하거나 DB를 복사하지 마세요. Paper에 이미 정상 접수된 대기열은 그대로 보존됩니다. 모의 테스트는 금액 차단을 해제하지 않습니다.
