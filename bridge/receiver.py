@@ -55,7 +55,7 @@ def amount_map(path):
             result[key] = value
         return result
     try:
-        value = json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique_keys)
+        value = json.loads(Path(path).read_text(encoding='utf-8-sig'), object_pairs_hook=unique_keys)
         if not isinstance(value, dict):
             raise ValueError()
         for key, target in value.items():
@@ -66,6 +66,38 @@ def amount_map(path):
         return value  # Empty mapping is intentional observe-only mode.
     except (OSError, ValueError, TypeError):
         raise ReceiverError('금액 매핑 파일이 올바르지 않습니다.') from None
+
+
+def mapping_digest(mapping):
+    canonical = json.dumps(mapping, sort_keys=True, separators=(',', ':')).encode('ascii')
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def authorize_delivery(enabled, verification_file, channel, mapping):
+    """Operator attestation, NOT evidence that the API's KRW/cheese ratio is known."""
+    if not enabled:
+        if verification_file is not None:
+            raise ReceiverError('확인 파일만으로 전달을 활성화하지 않습니다. 실행 옵션을 확인하세요.')
+        return False
+    if verification_file is None or not mapping:
+        raise ReceiverError('게임 전달에는 비어 있지 않은 매핑과 실검증 확인 파일이 필요합니다.')
+    try:
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError()
+                result[key] = value
+            return result
+        data = json.loads(Path(verification_file).read_text(encoding='utf-8-sig'), object_pairs_hook=unique)
+        if (not isinstance(data, dict) or type(data.get('version')) is not int or data['version'] != 1
+                or data.get('confirmedByOperator') is not True
+                or data.get('channelId') != channel
+                or data.get('mappingSha256') != mapping_digest(mapping)):
+            raise ValueError()
+    except (OSError, ValueError, TypeError):
+        raise ReceiverError('실검증 확인 파일이 없거나 채널·매핑이 일치하지 않습니다.') from None
+    return True
 
 
 class Journal:
@@ -87,17 +119,21 @@ class Journal:
         self.db.execute('''CREATE TABLE IF NOT EXISTS events (
             id TEXT PRIMARY KEY, effect TEXT, status TEXT NOT NULL,
             attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0)''')
+        if 'mapping_hash' not in {row[1] for row in self.db.execute('PRAGMA table_info(events)')}:
+            self.db.execute('ALTER TABLE events ADD COLUMN mapping_hash TEXT')
         self.db.commit()
 
-    def add(self, effect):
+    def add(self, effect, mapping_hash=None):
         event_id = secrets.token_urlsafe(24)
         with self.lock, self.db:
-            self.db.execute('INSERT INTO events(id,effect,status) VALUES(?,?,?)',
-                            (event_id, effect, 'pending' if effect else 'ignored'))
+            self.db.execute('INSERT INTO events(id,effect,status,mapping_hash) VALUES(?,?,?,?)',
+                            (event_id, effect, 'pending' if effect else 'ignored', mapping_hash))
         return event_id
 
-    def pending(self):
+    def pending(self, mapping_hash=None):
         with self.lock:
+            if mapping_hash is not None:
+                return self.db.execute("SELECT id,effect,attempts,retry_at FROM events WHERE status='pending' AND mapping_hash=? ORDER BY rowid LIMIT 1", (mapping_hash,)).fetchone()
             return self.db.execute("SELECT id,effect,attempts,retry_at FROM events WHERE status='pending' ORDER BY rowid LIMIT 1").fetchone()
 
     def done(self, event_id):
@@ -112,6 +148,10 @@ class Journal:
     def counts(self):
         with self.lock:
             return dict(self.db.execute('SELECT status,count(*) FROM events GROUP BY status'))
+
+    def held_count(self, approved_hash):
+        with self.lock:
+            return self.db.execute("SELECT count(*) FROM events WHERE status='pending' AND (mapping_hash IS NULL OR mapping_hash<>?)", (approved_hash,)).fetchone()[0]
 
     def bind_channel(self, channel):
         digest = hashlib.sha256(channel.encode()).hexdigest()
@@ -128,9 +168,10 @@ class Journal:
 
 
 class Intake:
-    def __init__(self, journal, channel, mapping, donation_type='CHAT'):
+    def __init__(self, journal, channel, mapping, donation_type='CHAT', allow_game_events=False):
         self.journal, self.channel, self.mapping = journal, channel, mapping
         self.donation_type = donation_type
+        self.allow_game_events = allow_game_events
 
     def receive(self, payload):
         data = object_message(payload)
@@ -143,16 +184,19 @@ class Intake:
                 not isinstance(text, str) or len(text) > 16384):
             self.journal.add(None)
             return False
+        if not self.allow_game_events:
+            self.journal.add(None)
+            return False
         target = self.mapping.get(amount)
         effect = bridge.select_event(target, text) if target is not None else None
         # Choose roulette exactly once, then persist BEFORE any Paper request.
-        self.journal.add(effect)
+        self.journal.add(effect, mapping_digest(self.mapping) if effect else None)
         return effect is not None
 
 
-def deliver_one(journal, token_file, port=18765, now=None, send=bridge.deliver):
+def deliver_one(journal, token_file, port=18765, now=None, send=bridge.deliver, mapping_hash=None):
     now = time.time() if now is None else now
-    row = journal.pending()
+    row = journal.pending(mapping_hash)
     if row is None or row[3] > now:
         return None
     event_id, effect, attempts, _ = row
@@ -400,8 +444,11 @@ class Session:
 
 
 def run(api, intake, journal, token_file, port=18765, stop=None,
-        factory=socket_client, tick=0.5):
+        factory=socket_client, tick=0.5, delivery_enabled=False):
     stop = stop or threading.Event()
+    if not delivery_enabled:
+        intake.allow_game_events = False
+    approved_hash = mapping_digest(intake.mapping)
     session = None
     retry_at = 0
     failures = 0
@@ -442,13 +489,14 @@ def run(api, intake, journal, token_file, port=18765, stop=None,
                 session = None
                 failures += 1
                 retry_at = now + min(60, 2 ** min(failures, 6))
-            result = deliver_one(journal, token_file, port)
+            result = deliver_one(journal, token_file, port, mapping_hash=approved_hash) if delivery_enabled else None
             if result is not None:
                 print('Paper 전달:', result)  # No token, donor, text or raw payload.
             if now >= report_at:
                 counts = journal.counts()
+                held = journal.held_count(approved_hash) if delivery_enabled else counts.get('pending', 0)
                 print('수신함 집계:', '대기', counts.get('pending', 0),
-                      '완료', counts.get('done', 0), '제외', counts.get('ignored', 0))
+                      '(그중 보류', held, ')', '완료', counts.get('done', 0), '제외', counts.get('ignored', 0))
                 report_at = now + 60
             stop.wait(tick)
     finally:
@@ -464,12 +512,15 @@ def main(argv=None):
     ap.add_argument('--donation-type', choices=['CHAT', 'VIDEO'], default='CHAT')
     ap.add_argument('--token-file', type=Path, required=True, help='Paper bridge-token.txt; never print contents')
     ap.add_argument('--port', type=int, default=18765)
+    ap.add_argument('--enable-game-delivery', action='store_true', help='Requires operator verification file; default blocks ALL Paper delivery')
+    ap.add_argument('--verification-file', type=Path, help='Local operator attestation bound to exact channel and mapping digest')
     args = ap.parse_args(argv)
     journal = None
     try:
         if not args.channel_id or len(args.channel_id) > 128 or not 1 <= args.port <= 65535:
             raise ReceiverError('채널 또는 포트 설정이 올바르지 않습니다.')
         mapping = amount_map(args.amount_map)
+        enabled = authorize_delivery(args.enable_game_delivery, args.verification_file, args.channel_id, mapping)
         client_id, secret = oauth.credentials(args.config)
         import socketio  # Fail before entering reconnect loop when dependencies are missing.
         del socketio
@@ -477,11 +528,13 @@ def main(argv=None):
         with oauth.TokenStore(oauth.LOCAL / 'receiver').lock():
             journal = Journal(oauth.LOCAL / 'donations.sqlite3')
             journal.bind_channel(args.channel_id)
-            intake = Intake(journal, args.channel_id, mapping, args.donation_type)
+            intake = Intake(journal, args.channel_id, mapping, args.donation_type, allow_game_events=enabled)
             print('후원 수신 시작. 금액 매핑은 사용자 설정이며 치즈 대응 검증 결과가 아닙니다.')
-            if not mapping:
-                print('관찰 모드: 새 후원은 게임에 전달하지 않습니다. 기존 미전달 이벤트는 재시도합니다.')
-            run(Api(Tokens(client_id, secret, oauth.TokenStore())), intake, journal, args.token_file, args.port)
+            if not enabled:
+                print('관찰 모드: 신규 후원 변환과 기존 대기 이벤트의 Paper 전달을 모두 차단합니다.')
+            else:
+                print('사용자 실검증 확인에 따라 전달을 활성화했습니다. 확인은 API가 보증한 환산율이 아닙니다.')
+            run(Api(Tokens(client_id, secret, oauth.TokenStore())), intake, journal, args.token_file, args.port, delivery_enabled=enabled)
     except (ReceiverError, oauth.OAuthError) as e:
         print(str(e))
         return 1
