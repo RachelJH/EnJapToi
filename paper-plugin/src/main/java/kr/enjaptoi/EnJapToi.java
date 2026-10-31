@@ -11,7 +11,6 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.scheduler.BukkitTask;
 import net.kyori.adventure.text.Component;
 
@@ -20,23 +19,26 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.SecureRandom;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
 
 public class EnJapToi extends JavaPlugin implements CommandExecutor {
-  private final Deque<String> queue = new ArrayDeque<>();
-  private final Set<String> received = new HashSet<>();
+  private EventStore store;
+  private boolean storageFailed;
   private final Random random = new SecureRandom();
-  private boolean paused = false;
   private HttpServer server;
   private BukkitTask ticker;
-  private File stateFile;
   private String token;
   private long lastExecution = 0;
 
   @Override public void onEnable() {
-    saveDefaultConfig(); stateFile = new File(getDataFolder(), "state.yml"); loadState();
+    saveDefaultConfig();
     try {
+      store = new EventStore(getDataFolder().toPath().resolve("events.sqlite3"));
+      migrateLegacyState();
+      storageFailed=false;
+      if (store.count("UNCERTAIN") > 0) getLogger().warning("Uncertain events require manual review; they are never replayed automatically.");
       File tokenFile = new File(getDataFolder(), "bridge-token.txt");
       if (!tokenFile.exists()) {
         byte[] bytes = new byte[32]; new SecureRandom().nextBytes(bytes);
@@ -44,60 +46,71 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       }
       token = Files.readString(tokenFile.toPath(), StandardCharsets.UTF_8).trim();
       server = HttpServer.create(new InetSocketAddress(getConfig().getString("listen-host", "127.0.0.1"), getConfig().getInt("listen-port",18765)), 0);
-      server.createContext("/event", exchange -> {
-        if (!"POST".equals(exchange.getRequestMethod())) { respond(exchange,405,"method not allowed"); return; }
-        if (!token.equals(exchange.getRequestHeaders().getFirst("X-EJT-Token"))) { respond(exchange,401,"unauthorized"); return; }
-        String body = new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8).trim();
-        // Simple wire format: unique ID TAB event key. Reject invalid data.
-        String[] parts = body.split("\\t", -1);
-        if (parts.length != 2 || !parts[0].matches("[A-Za-z0-9_-]{1,100}") || !parts[1].matches("buff|move|bread|pickaxe|mob|debuff|clear|chancekill|surface|kill")) {
-          respond(exchange,400,"invalid event"); return;
-        }
-        try {
-          String result = Bukkit.getScheduler().callSyncMethod(this, () -> {
-            if (received.contains(parts[0])) return "duplicate";
-            received.add(parts[0]); queue.addLast(parts[1]); saveState(); return "queued";
-          }).get(5, TimeUnit.SECONDS);
-          respond(exchange,200,result);
-        } catch (Exception e) { respond(exchange,503,"unavailable"); }
-      });
+      server.createContext("/event", new BridgeEndpoint(token,(id,effect) ->
+        Bukkit.getScheduler().callSyncMethod(this, () -> {
+          try { return store.enqueue(id,effect); }
+          catch(SQLException e) { storageFailed=true;throw e; }
+        }).get(5,TimeUnit.SECONDS)));
       server.start();
     } catch(Exception e) { getLogger().severe("Local HTTP bridge failed: " + e.getMessage()); getServer().getPluginManager().disablePlugin(this); return; }
     Objects.requireNonNull(getCommand("ejt")).setExecutor(this);
-    ticker = Bukkit.getScheduler().runTaskTimer(this, () -> {
-      if (paused || queue.isEmpty()) return;
-      Player player = Bukkit.getPlayerExact(getConfig().getString("broadcaster", "Yirue"));
-      if (player == null) return;
-      long now = System.currentTimeMillis();
-      if (now - lastExecution < getConfig().getLong("interval-ticks",60)*50) return;
-      String event = queue.removeFirst(); saveState(); lastExecution=now;
-      executeEvent(player,event);
-    },20L,20L);
+    ticker = Bukkit.getScheduler().runTaskTimer(this, this::tick,20L,20L);
   }
-  private static void respond(com.sun.net.httpserver.HttpExchange e,int status,String msg) throws IOException {
-    byte[] bytes=msg.getBytes(StandardCharsets.UTF_8); e.sendResponseHeaders(status,bytes.length);
-    try(OutputStream out=e.getResponseBody()){out.write(bytes);} }
-  private void loadState() {
-    if (!stateFile.exists()) return;
-    FileConfiguration y=YamlConfiguration.loadConfiguration(stateFile);
-    queue.addAll(y.getStringList("pending")); received.addAll(y.getStringList("received")); paused=y.getBoolean("paused",false);
+  private void tick() {
+    if (storageFailed) return;
+    try {
+      if (store.paused() || store.count("PENDING")==0) return;
+      Player player=Bukkit.getPlayerExact(getConfig().getString("broadcaster", "Yirue"));
+      if(player==null)return;
+      long now=System.currentTimeMillis();
+      if(now-lastExecution<getConfig().getLong("interval-ticks",60)*50)return;
+      EventStore.Event event=store.begin();
+      if(event==null)return;
+      lastExecution=now;
+      try { executeEvent(player,event.effect()); }
+      catch(RuntimeException e) {
+        store.uncertain(event.id());
+        getLogger().severe("Event execution interrupted; marked UNCERTAIN and paused. Review before resuming.");
+        return;
+      }
+      store.complete(event.id());
+    } catch(SQLException e) {
+      storageFailed=true;
+      getLogger().severe("Event storage failed; execution stopped. Restart and review UNCERTAIN events.");
+    }
   }
-  private void saveState() {
-    YamlConfiguration y=new YamlConfiguration(); y.set("pending",new ArrayList<>(queue)); y.set("received",new ArrayList<>(received)); y.set("paused",paused);
-    try { y.save(stateFile); } catch(IOException e){getLogger().severe("Failed to save state: "+e.getMessage());}
+  private void migrateLegacyState() throws Exception {
+    if(!store.needsMigration())return;
+    File legacy=new File(getDataFolder(),"state.yml");
+    if(!legacy.exists()){store.migrateLegacy(List.of(),List.of(),false);return;}
+    YamlConfiguration y=new YamlConfiguration();
+    y.load(legacy); // Strict parse: never silently replace damaged state with an empty queue.
+    for(String key:List.of("received","pending")) {
+      Object value=y.get(key);
+      if(!(value instanceof List<?> list) || list.stream().anyMatch(item->!(item instanceof String)))
+        throw new IOException("Invalid legacy state");
+    }
+    if(!y.isBoolean("paused"))throw new IOException("Invalid legacy pause state");
+    store.migrateLegacy(y.getStringList("received"),y.getStringList("pending"),y.getBoolean("paused"));
+    getLogger().info("Legacy state imported transactionally. Original state.yml retained; do not restore it over the database.");
   }
-  @Override public void onDisable() {if(ticker!=null)ticker.cancel(); if(server!=null)server.stop(1); saveState();}
+  @Override public void onDisable() {
+    if(ticker!=null)ticker.cancel();
+    if(server!=null)server.stop(1);
+    if(store!=null)store.close();
+  }
   @Override public boolean onCommand(CommandSender sender,Command cmd,String label,String[] args) {
     if (!sender.hasPermission("enjaptoi.admin")) {sender.sendMessage("No permission");return true;}
     if (args.length==0){sender.sendMessage("/ejt pause | resume | status | reload | test <event>");return true;}
-    switch(args[0].toLowerCase(Locale.ROOT)) {
-      case "pause" -> {paused=true;saveState();sender.sendMessage("Paused");}
-      case "resume" -> {paused=false;saveState();sender.sendMessage("Resumed");}
+    try { switch(args[0].toLowerCase(Locale.ROOT)) {
+      case "pause" -> {store.setPaused(true);sender.sendMessage("Paused");}
+      case "resume" -> {store.setPaused(false);sender.sendMessage("Resumed (UNCERTAIN events remain held)");}
       case "reload" -> {reloadConfig();sender.sendMessage("Config reloaded (HTTP host/port require restart)");}
-      case "status" -> sender.sendMessage("Pending="+queue.size()+", paused="+paused+", broadcaster="+getConfig().getString("broadcaster"));
+      case "status" -> sender.sendMessage("Pending="+store.count("PENDING")+", uncertain="+store.count("UNCERTAIN")+", paused="+store.paused()+", broadcaster="+getConfig().getString("broadcaster"));
       case "test" -> {if(args.length<2){sender.sendMessage("Specify event key");break;} Player p=Bukkit.getPlayerExact(getConfig().getString("broadcaster","Yirue"));if(p==null){sender.sendMessage("Broadcaster offline");break;} executeEvent(p,args[1]);}
       default -> sender.sendMessage("Unknown subcommand");
-    } return true;
+    } } catch(SQLException e) { storageFailed=true;sender.sendMessage("Event storage unavailable; restart and review state. Success cannot be confirmed."); }
+    return true;
   }
   private void executeEvent(Player p,String event) {
     boolean success=true;

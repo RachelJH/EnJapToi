@@ -34,7 +34,7 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 - Paper 26.1 이후 Maven 버전 표기([공식 문서](https://docs.papermc.io/paper/dev/project-setup/))를 따르며, 가변 범위 `[26.3.build,)` 대신 검증한 `26.3.build.230-stable`을 고정해 사용합니다. 저장소는 `https://repo.papermc.io/repository/maven-public/`, Java 타깃은 25입니다.
 - 산출물: `paper-plugin/target/enjaptoi-0.1.0.jar`. JAR 무결성, 플러그인 클래스·설정 포함, Java 25 바이트코드를 확인했습니다.
 - Python 송신기의 명령어 10개, 선택 규칙 4개, 임시 HTTP 모의 수신기로의 CLI 전송을 검증했습니다. 이 모의 수신기 검증과 별도로, Paper 26.3 빌드 230에서 실제 브리지 전송도 확인했습니다.
-- 저장소에 Java 자동 테스트가 없어 Maven은 `No tests to run`을 보고합니다. Paper 26.3 빌드 230 / API 230에서 플러그인 활성화, `ejt status`, 토큰 생성, `!밥` 후원의 `queued` 응답, 동일 ID의 `duplicate` 응답, 플레이어 0명 상태의 대기열 저장 및 정상 재시작 후 보존을 검증했습니다. 실제 플레이어가 접속하지 않아 게임 효과는 미검증입니다.
+- Java 저장/HTTP/강제 종료 복구 자동 테스트 16개가 통과했습니다. Paper 26.3 빌드 230 / API 230에서 플러그인 활성화, `ejt status`, 토큰 생성, `!밥` 후원의 `queued` 응답, 동일 ID의 `duplicate` 응답, 플레이어 0명 상태의 대기열 저장 및 정상 재시작 후 보존을 검증했습니다. 실제 플레이어가 접속하지 않아 게임 효과는 미검증입니다.
 
 ## 명령어 규칙
 - 1000: `!버프`, `!이동`, `!밥`, `!다곡`; 메시지에 명령어가 없으면 4종 균등 룰렛.
@@ -46,8 +46,8 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 ## 반드시 해결해야 할 항목
 1. **실제 치지직 계정·후원 미검증.** 공식 세션 수신기를 추가했지만 금액 대응과 실제 Scope 승인·후원 수신은 실행 PC에서 검증해야 합니다. 공식 후원 고유 ID와 누락분 재생 명세가 없어 완전한 중복·누락 방지를 보장하지 않습니다. `bridge.py`는 계속 로컬 시뮬레이터입니다.
 2. **실제 게임 효과 미검증.** Paper 26.3 빌드 230에서 서버 통합 검증을 완료했으며, 플레이어가 접속한 상태의 게임 효과와 비정상 종료 시 복구는 별도 테스트가 필요합니다.
-3. 상태 파일의 이벤트 실행 전 저장 구조는 강제 종료 순간 이벤트 유실 가능. 금전성 이벤트에 대해 원자적 상태 저장/실행 전후 기록/관리자 재처리 기능 필요.
-4. `received` 목록은 무한히 커지므로 운영 전 보존 정책 필요.
+3. SQLite로 수신 기록과 실행 의도를 저장합니다. 강제 종료 시 불확실한 RUNNING은 UNCERTAIN으로 보류하며 자동 재실행하지 않습니다. 게임 효과와 월드 저장은 DB와 원자적이지 않아 정확히 한 번 실행은 보장하지 않습니다. [저장·복구 절차](docs/paper-event-durability.md)를 확인하세요.
+4. SQLite의 처리 ID 기록은 자동 삭제하지 않으므로 운영 전 보존·백업 정책이 필요합니다.
 5. 순간이동의 안전 판정은 단순 블록 판정이며 월드 보더, 청크 로드, 엔드 공허, 네더 지붕 및 위험 지형을 포함한 실서버 검증 필요.
 6. `/ejt test`는 즉시 실행하며 테스트 시에도 인벤토리 삭제/즉사 가능. 운영 서버에서 위험 이벤트 테스트 금지.
 7. 모의 후원 시 `--id`를 생략하면 새 ID가 생성됨. 실제 후원 연결 시 안정적인 고유 ID가 필수.
@@ -206,7 +206,7 @@ Socket.IO 자체의 자동 재연결을 끄고, 연결 중단·연결/구독 시
 - 공식 후원 메시지에는 고유 후원 ID가 명시돼 있지 않습니다. 같은 내용이 치지직에서 두 번 수신되면 서로 다른 로컬 이벤트가 됩니다. 금액·닉네임·메시지 해시로 임의 중복 제거하지 않습니다.
 - 로컬 저장 이후 Paper 재시도의 ID는 같게 유지합니다. 하지만 치지직 단계의 완벽한 중복 방지나 단 한 번 실행을 보장하지 않습니다.
 - 연결 중단 중 발생하거나 로컬 저장 전에 유실된 후원을 자동 복구할 공식 이력·재생 API는 확인되지 않았습니다. 세션 목록 90일 조회는 후원 내역 조회가 아닙니다.
-- Paper 플러그인의 비원자적 상태 저장, 저장 실패 및 강제 종료 순간의 게임 실행 유실 문제는 이번 변경에서 고치지 않았습니다.
+- Paper는 SQLite commit 이후 queued를 반환하고, 재시작 시 불확실한 실행은 UNCERTAIN으로 보류합니다. 월드·게임 효과와 DB를 하나의 트랜잭션으로 만들 수 없어 정확히 한 번 실행은 보장하지 않습니다. [상세 저장·복구 절차](docs/paper-event-durability.md)를 확인하세요.
 - 처리 기록은 자동 삭제하지 않습니다. 파일을 삭제하면 대기 이벤트가 유실될 수 있으므로 임의로 지우지 마세요. 백업은 수신기를 정상 종료한 상태에서 합니다. 실서비스 보존·정리 정책은 후속 작업입니다.
 
 공식 API 도메인은 `openapi.chzzk.naver.com`, 사용자 인증은 `chzzk.naver.com`입니다. Socket.IO 호스트는 공식 API 응답에 따라 달라집니다(문서 예: `ssio08.nchat.naver.com`). 방화벽·Codex 네트워크 제한에서는 실제 반환 호스트의 HTTPS/WebSocket 접근도 필요하며, 인증 토큰이 포함된 URL 전체를 로그나 지원 요청에 붙이지 마세요. TLS 검증과 기존 프록시는 유지합니다.
@@ -231,3 +231,5 @@ npm ci --prefix tests/socketio2 --ignore-scripts
 공식 근거: [Session](https://chzzk.gitbook.io/chzzk/chzzk-api/session), [Authorization](https://chzzk.gitbook.io/chzzk/chzzk-api/authorization), [인증 헤더·공통 응답](https://chzzk.gitbook.io/chzzk/chzzk-api/tips), [User](https://chzzk.gitbook.io/chzzk/chzzk-api/user). 실제 계정·후원, 원/치즈 대응, 실제 소켓 호스트·권한 승인·재연결 동작과 플레이어 게임 효과는 친구 PC에서 별도 검증해야 합니다.
 
 병합 전 상태 경합·장애·토큰 전달 경로 리뷰와 남은 Paper 저장 한계는 [코드 리뷰 기록](docs/chzzk-donations-review.md)에 정리했습니다. 수신 메시지는 wire 순서로 처리하며, 저장 실패·권한 취소는 후속 disconnect로 덮지 않고 중단합니다. Paper로 보내는 loopback 요청은 환경 HTTP 프록시와 리디렉션을 사용하지 않습니다. 금액 JSON에 같은 키가 두 번 있으면 실행을 거부합니다.
+
+Paper 저장 안정성 후속 개선: [SQLite 수신 응답·UNCERTAIN 처리·이전 YAML 이관·백업 안내](docs/paper-event-durability.md). 플러그인 Java 자동 테스트 16개를 추가했습니다. 기존 리뷰 기록의 Paper 미수정 항목은 해당 후속 개선 전 상태를 설명합니다.
