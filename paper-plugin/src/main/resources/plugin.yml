@@ -1,0 +1,12 @@
+name: EnJapToi
+version: 0.1.0
+main: kr.enjaptoi.EnJapToi
+api-version: '26.3'
+description: EnJapToi donation event prototype
+commands:
+  ejt:
+    description: EnJapToi administration
+    permission: enjaptoi.admin
+permissions:
+  enjaptoi.admin:
+    default: op

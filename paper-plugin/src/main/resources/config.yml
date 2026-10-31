@@ -1,0 +1,8 @@
+broadcaster: Yirue
+interval-ticks: 60
+random-teleport-radius: 300
+spawn-min-radius: 3
+spawn-max-radius: 7
+# Token is generated on first startup in the plugin data folder.
+listen-host: 127.0.0.1
+listen-port: 18765
