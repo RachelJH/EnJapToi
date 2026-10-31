@@ -25,6 +25,8 @@ import java.util.concurrent.*;
 
 public class EnJapToi extends JavaPlugin implements CommandExecutor {
   private EventStore store;
+  private ManagedReceiver managedReceiver;
+  private final String serverInstance=UUID.randomUUID().toString();
   private boolean storageFailed;
   private final Random random = new SecureRandom();
   private HttpServer server;
@@ -46,7 +48,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       }
       token = Files.readString(tokenFile.toPath(), StandardCharsets.UTF_8).trim();
       server = HttpServer.create(new InetSocketAddress(getConfig().getString("listen-host", "127.0.0.1"), getConfig().getInt("listen-port",18765)), 0);
-      server.createContext("/event", new BridgeEndpoint(token,(id,effect) ->
+      server.createContext("/event", new BridgeEndpoint(token,serverInstance,(id,effect) ->
         Bukkit.getScheduler().callSyncMethod(this, () -> {
           try { return store.enqueue(id,effect); }
           catch(SQLException e) { storageFailed=true;throw e; }
@@ -55,6 +57,28 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     } catch(Exception e) { getLogger().severe("Local HTTP bridge failed: " + e.getMessage()); getServer().getPluginManager().disablePlugin(this); return; }
     Objects.requireNonNull(getCommand("ejt")).setExecutor(this);
     ticker = Bukkit.getScheduler().runTaskTimer(this, this::tick,20L,20L);
+    startReceiver();
+  }
+  private void startReceiver() {
+    if(!getConfig().getBoolean("receiver.enabled",false)) {
+      getLogger().info("Automatic donation receiver disabled; configure receiver settings to enable.");return;
+    }
+    try {
+      List<String> command=new ArrayList<>(List.of(
+        getConfig().getString("receiver.python","python"),"-u",
+        getConfig().getString("receiver.script",""),"--managed-stdin",
+        "--channel-id",getConfig().getString("receiver.channel-id",""),
+        "--donation-type",getConfig().getString("receiver.donation-type","CHAT"),
+        "--amount-map",getConfig().getString("receiver.amount-map",""),
+        "--token-file",new File(getDataFolder(),"bridge-token.txt").getAbsolutePath(),
+        "--port",Integer.toString(getConfig().getInt("listen-port",18765))));
+      String client=getConfig().getString("receiver.client-config","");
+      if(!client.isBlank())command.addAll(List.of("--config",client));
+      if(getConfig().getBoolean("receiver.enable-game-delivery",false))
+        command.addAll(List.of("--enable-game-delivery","--verification-file",getConfig().getString("receiver.verification-file","")));
+      managedReceiver=new ManagedReceiver(command,Map.of("EJT_SERVER_INSTANCE",serverInstance),new File(getDataFolder(),"receiver.log"));
+      getLogger().info("Managed donation receiver started. See receiver.log for safe diagnostics.");
+    } catch(Exception e){getLogger().severe("Managed receiver could not start. Check receiver paths; Paper remains available.");}
   }
   private void tick() {
     if (storageFailed) return;
@@ -95,6 +119,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     getLogger().info("Legacy state imported transactionally. Original state.yml retained; do not restore it over the database.");
   }
   @Override public void onDisable() {
+    if(managedReceiver!=null)managedReceiver.close();
     if(ticker!=null)ticker.cancel();
     if(server!=null)server.stop(1);
     if(store!=null)store.close();
@@ -106,7 +131,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       case "pause" -> {store.setPaused(true);sender.sendMessage("Paused");}
       case "resume" -> {store.setPaused(false);sender.sendMessage("Resumed (UNCERTAIN events remain held)");}
       case "reload" -> {reloadConfig();sender.sendMessage("Config reloaded (HTTP host/port require restart)");}
-      case "status" -> sender.sendMessage("Pending="+store.count("PENDING")+", uncertain="+store.count("UNCERTAIN")+", paused="+store.paused()+", broadcaster="+getConfig().getString("broadcaster"));
+      case "status" -> sender.sendMessage("Pending="+store.count("PENDING")+", uncertain="+store.count("UNCERTAIN")+", paused="+store.paused()+", broadcaster="+getConfig().getString("broadcaster")+", receiver="+(managedReceiver!=null && managedReceiver.alive()));
       case "test" -> {if(args.length<2){sender.sendMessage("Specify event key");break;} Player p=Bukkit.getPlayerExact(getConfig().getString("broadcaster","Yirue"));if(p==null){sender.sendMessage("Broadcaster offline");break;} executeEvent(p,args[1]);}
       default -> sender.sendMessage("Unknown subcommand");
     } } catch(SQLException e) { storageFailed=true;sender.sendMessage("Event storage unavailable; restart and review state. Success cannot be confirmed."); }

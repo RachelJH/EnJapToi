@@ -6,3 +6,15 @@ spawn-max-radius: 7
 # Token is generated on first startup in the plugin data folder.
 listen-host: 127.0.0.1
 listen-port: 18765
+
+# Configure once, then start/stop Paper normally. No secrets in this file.
+receiver:
+  enabled: false
+  python: 'C:/EnJapToi/.venv/Scripts/python.exe'
+  script: 'C:/EnJapToi/bridge/receiver.py'
+  channel-id: ''
+  donation-type: CHAT
+  amount-map: 'C:/EnJapToi/bridge/.local/amount-map.json'
+  client-config: '' # Or absolute path to ignored client.json; otherwise inherit environment
+  enable-game-delivery: false
+  verification-file: 'C:/EnJapToi/bridge/.local/amount-verification.json'

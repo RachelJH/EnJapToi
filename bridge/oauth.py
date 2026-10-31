@@ -92,15 +92,32 @@ class TokenStore:
     def lock(self):
         self.prepare()
         path = self.path.with_suffix(self.path.suffix + '.lock')
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            raise OAuthError('다른 인증 작업이 진행 중입니다. 남은 잠금 파일은 README를 확인하세요.') from None
-        try:
+            if os.name == 'nt':
+                import msvcrt
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b'0')
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+        except OSError:
             os.close(fd)
+            raise OAuthError('다른 인증 작업이 진행 중입니다. 잠금 파일은 삭제하지 마세요.') from None
+        try:
             yield
         finally:
-            path.unlink(missing_ok=True)
+            if locked:
+                if os.name == 'nt':
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def save(self, tokens):
         self.prepare()
