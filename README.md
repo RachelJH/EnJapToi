@@ -1,6 +1,6 @@
 # 엔잡퇴 v0.1 — Paper 플러그인 소스 + 로컬 후원 시뮬레이터
 
-**상태: Java 25 빌드 검증 완료·실제 Paper 서버 실행 미검증 개발 초안. 실제 치지직 연결은 포함하지 않습니다.**
+**상태: Java 25 빌드·Paper 26.3 빌드 230 서버 통합 검증 완료·게임 내 효과 미검증 개발 초안. 실제 치지직 연결은 포함하지 않습니다.**
 
 대상: Windows / Java 25 / 사용자 제공 Paper 26.3 / 방송인 `Yirue`.
 
@@ -15,7 +15,7 @@
 1. Java 25와 Maven 3.9+ 설치. `java -version`, `mvn -version` 확인.
 2. `paper-plugin` 폴더에서 `mvn clean package` 실행.
 3. `target/enjaptoi-0.1.0.jar` 파일을 Paper 서버의 `plugins` 폴더로 복사하고 서버 재시작.
-4. 서버 콘솔에서 `version` 명령으로 Paper 버전을 확인. API 의존성은 공식 저장소의 `26.3.build.235-stable`로 고정했습니다. 공식 서버 목록의 Paper 26.3 안정 빌드 235와 대응하며, 사용자의 실제 서버 빌드와 일치하는지는 별도 확인이 필요합니다. `plugin.yml`의 `api-version: '26.3'`과 실제 서버 로딩도 확인하세요.
+4. 서버 콘솔에서 `version` 명령으로 Paper 버전을 확인. API 의존성은 공식 저장소의 `26.3.build.230-stable`로 고정했습니다. 운영 대상인 Paper 26.3 빌드 230과 대응합니다. `plugin.yml`의 `api-version: '26.3'`과 실제 서버 로딩도 확인하세요.
 5. 서버 시작 후 `plugins/EnJapToi/bridge-token.txt`가 자동 생성되는지 확인. 이 파일은 타인에게 공유하지 마세요.
 6. 콘솔에서 `ejt status`, 게임에서 OP 권한으로 `/ejt test bread` 테스트. 방송인 Yirue가 접속해 있어야 효과 적용.
 
@@ -31,10 +31,10 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 
 ## 클라우드 빌드 검증
 - Java 25 / Maven 3.9.11에서 `paper-plugin` 디렉터리의 `mvn -B -U -s /workspace/setup/maven-settings.xml package` 성공. 클라우드에서는 먼저 `source /workspace/setup/activate.sh`를 실행합니다. 일반 개발 환경은 해당 프록시 설정 없이 `mvn -B -U package`를 사용합니다.
-- Paper 26.1 이후 Maven 버전 표기([공식 문서](https://docs.papermc.io/paper/dev/project-setup/))를 따르며, 가변 범위 `[26.3.build,)` 대신 검증한 `26.3.build.235-stable`을 고정해 사용합니다. 저장소는 `https://repo.papermc.io/repository/maven-public/`, Java 타깃은 25입니다.
+- Paper 26.1 이후 Maven 버전 표기([공식 문서](https://docs.papermc.io/paper/dev/project-setup/))를 따르며, 가변 범위 `[26.3.build,)` 대신 검증한 `26.3.build.230-stable`을 고정해 사용합니다. 저장소는 `https://repo.papermc.io/repository/maven-public/`, Java 타깃은 25입니다.
 - 산출물: `paper-plugin/target/enjaptoi-0.1.0.jar`. JAR 무결성, 플러그인 클래스·설정 포함, Java 25 바이트코드를 확인했습니다.
-- Python 송신기의 명령어 10개, 선택 규칙 4개, 임시 HTTP 모의 수신기로의 CLI 전송을 검증했습니다. 실제 Paper 통합 테스트는 아닙니다.
-- 저장소에 Java 자동 테스트가 없어 Maven은 `No tests to run`을 보고합니다. 실제 서버 로딩, 중복 방지·대기열의 서버 동작, 게임 효과는 아직 검증하지 않았습니다.
+- Python 송신기의 명령어 10개, 선택 규칙 4개, 임시 HTTP 모의 수신기로의 CLI 전송을 검증했습니다. 이 모의 수신기 검증과 별도로, Paper 26.3 빌드 230에서 실제 브리지 전송도 확인했습니다.
+- 저장소에 Java 자동 테스트가 없어 Maven은 `No tests to run`을 보고합니다. Paper 26.3 빌드 230 / API 230에서 플러그인 활성화, `ejt status`, 토큰 생성, `!밥` 후원의 `queued` 응답, 동일 ID의 `duplicate` 응답, 플레이어 0명 상태의 대기열 저장 및 정상 재시작 후 보존을 검증했습니다. 실제 플레이어가 접속하지 않아 게임 효과는 미검증입니다.
 
 ## 명령어 규칙
 - 1000: `!버프`, `!이동`, `!밥`, `!다곡`; 메시지에 명령어가 없으면 4종 균등 룰렛.
@@ -45,7 +45,7 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 
 ## 반드시 해결해야 할 항목
 1. **실제 치지직 API 연동 없음.** 공식 인증/후원 세션 수신 및 이벤트 고유 ID 확인 후 별도 어댑터 구현 필요. 현재 Python은 로컬 시뮬레이터임.
-2. **실제 Paper 26.3 서버 테스트 미실시.** API 다운로드와 Java 25 빌드는 검증했으며, 서버 로딩 및 실제 게임 효과는 별도 테스트가 필요합니다.
+2. **실제 게임 효과 미검증.** Paper 26.3 빌드 230에서 서버 통합 검증을 완료했으며, 플레이어가 접속한 상태의 게임 효과와 비정상 종료 시 복구는 별도 테스트가 필요합니다.
 3. 상태 파일의 이벤트 실행 전 저장 구조는 강제 종료 순간 이벤트 유실 가능. 금전성 이벤트에 대해 원자적 상태 저장/실행 전후 기록/관리자 재처리 기능 필요.
 4. `received` 목록은 무한히 커지므로 운영 전 보존 정책 필요.
 5. 순간이동의 안전 판정은 단순 블록 판정이며 월드 보더, 청크 로드, 엔드 공허, 네더 지붕 및 위험 지형을 포함한 실서버 검증 필요.
