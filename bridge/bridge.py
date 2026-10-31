@@ -17,9 +17,19 @@ def select_event(amount, message):
     if amount == 1000: return secrets.choice(["buff", "move", "bread", "pickaxe"])
     return None
 
+class _NoLocalRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
 def deliver(event, event_id, token, port):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/event", data=f"{event_id}\t{event}".encode(),headers={"X-EJT-Token":token},method="POST")
-    with urllib.request.urlopen(req,timeout=10) as resp: return resp.read().decode()
+    # This credential is for loopback Paper only, never a proxy or redirect target.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoLocalRedirect())
+    with opener.open(req,timeout=10) as resp:
+        body = resp.read(129)
+        if len(body) > 128:
+            raise ValueError('Unexpected Paper response size')
+        return body.decode()
 
 def main():
     ap=argparse.ArgumentParser(description="Local simulation of donation -> Paper")

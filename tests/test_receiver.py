@@ -213,6 +213,124 @@ class ReceiverTests(unittest.TestCase):
         self.assertNotIn('secret',output.getvalue())
 
 
+    def test_fatal_errors_are_not_overwritten_by_disconnect(self):
+        s = r.Session(Mock(), self.intake, FakeSocket)
+        s.accepting = True
+        with patch.object(self.journal, 'add', side_effect=sqlite3.OperationalError('private-db')):
+            s.donation(self.payload)
+        fatal = s.failure
+        s.disconnected()
+        self.assertIs(s.failure, fatal)
+        self.assertNotIsInstance(s.failure, r.TransientError)
+        with self.assertRaises(r.ReceiverError): s.step()
+        self.assertFalse(s.accepting)
+        self.assertIsNone(self.journal.pending())
+        s.close()
+
+    def test_revoked_before_connected_processing_never_resubscribes(self):
+        api = Mock(); sock = FakeSocket()
+        s = r.Session(api, self.intake, lambda: sock)
+        s.connect()
+        s.system({'type':'revoked','data':{'eventType':'DONATION','channelId':'channel'}})
+        s.disconnected()
+        with self.assertRaises(r.ReceiverError) as error: s.step()
+        self.assertNotIsInstance(error.exception, r.TransientError)
+        api.subscribe.assert_not_called()
+        s.donation(self.payload)
+        self.assertIsNone(self.journal.pending())
+        s.close()
+
+    def test_storage_failure_during_subscribe_is_not_hidden(self):
+        api = Mock(); s = r.Session(api, self.intake, FakeSocket)
+        def subscribe(key):
+            with patch.object(self.journal, 'add', side_effect=sqlite3.OperationalError('private-db')):
+                s.donation(self.payload)
+            s.disconnected()
+            raise r.TransientError('fixed HTTP timeout')
+        api.subscribe.side_effect = subscribe
+        s.connect()
+        with self.assertRaises(r.ReceiverError) as error: s.step()
+        self.assertNotIsInstance(error.exception, r.TransientError)
+        self.assertIsNone(self.journal.pending())
+        s.close()
+
+    def test_handshake_cannot_reclassify_storage_failure_as_transient(self):
+        sock = FakeSocket(); s = r.Session(Mock(), self.intake, lambda: sock)
+        def connect(*args, **kwargs):
+            s.fail(r.ReceiverError('fixed fatal storage error'))
+            raise OSError('private-url')
+        sock.connect = connect
+        with self.assertRaises(r.ReceiverError) as error: s.connect()
+        self.assertNotIsInstance(error.exception, r.TransientError)
+        s.close()
+
+    def test_invalid_donation_stops_instead_of_silent_loss(self):
+        s = r.Session(Mock(), self.intake, FakeSocket); s.accepting = True
+        s.donation('private-invalid-json')
+        with self.assertRaises(r.ReceiverError) as error: s.step()
+        self.assertNotIn('private', str(error.exception))
+        self.assertFalse(s.accepting)
+        s.close()
+
+    def test_unsolicited_confirmation_and_changed_key(self):
+        s = r.Session(Mock(), self.intake, FakeSocket)
+        s.system({'type':'subscribed','data':{'eventType':'DONATION','channelId':'channel'}})
+        with self.assertRaises(r.ReceiverError): s.step()
+        self.assertFalse(s.subscribed); s.close()
+        s = r.Session(Mock(), self.intake, FakeSocket)
+        s.connect(); s.step()
+        s.system({'type':'connected','data':{'sessionKey':'different-key'}})
+        with self.assertRaises(r.TransientError): s.step()
+        s.close()
+
+    def test_duplicate_mapping_key_is_rejected(self):
+        p = Path(self.tmp.name)/'duplicate.json'
+        p.write_text('{"1000":1000,"1000":30000}')
+        with self.assertRaises(r.ReceiverError): r.amount_map(p)
+
+    def test_engineio_dispatch_preserves_wire_order_without_worker_threads(self):
+        try:
+            from engineio import packet
+            client = r.socket_client()
+        except ImportError: self.skipTest('Install bridge/requirements.txt')
+        received = []
+        caller = threading.get_ident()
+        client.eio.on('message', lambda value: received.append((value, threading.get_ident())))
+        with patch.object(client.eio, 'start_background_task', side_effect=AssertionError('out-of-order worker')):
+            for value in ('connected', 'donation-1', 'donation-2', 'revoked'):
+                client.eio._receive_packet(packet.Packet(packet.MESSAGE, data=value))
+        self.assertEqual(received, [(v, caller) for v in ('connected','donation-1','donation-2','revoked')])
+
+    def test_local_bridge_token_never_follows_proxy_or_redirect(self):
+        proxy_requests = []
+        target_requests = []
+        class Target(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_GET(self): target_requests.append(self.path); self.send_response(200);self.end_headers()
+            def do_POST(self): self.do_GET()
+        target = HTTPServer(('127.0.0.1',0), Target)
+        class Redirect(BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                if self.path.startswith('http:'): proxy_requests.append(self.path)
+                self.send_response(302)
+                self.send_header('Location','http://127.0.0.1:'+str(target.server_port)+'/stolen')
+                self.end_headers()
+        source = HTTPServer(('127.0.0.1',0), Redirect)
+        for server in (target, source):
+            thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        with patch.dict(os.environ, {'http_proxy':'http://127.0.0.1:'+str(source.server_port),
+                                      'HTTP_PROXY':'http://127.0.0.1:'+str(source.server_port),
+                                      'no_proxy':'','NO_PROXY':''}):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                r.bridge.deliver('bread','event-id','private-token',source.server_port)
+            self.assertEqual(error.exception.code,302)
+            error.exception.close()
+        self.assertEqual(proxy_requests, [])
+        self.assertEqual(target_requests, [])
+
+
 @unittest.skipUnless(shutil.which('node') and (Path(__file__).parent/'socketio2/node_modules/socket.io').exists(),
                      'Optional local Socket.IO 2.0.3 fixture: npm ci --prefix tests/socketio2 --ignore-scripts')
 class SocketIO2Integration(unittest.TestCase):

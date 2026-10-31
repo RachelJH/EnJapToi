@@ -47,8 +47,15 @@ def object_message(value):
 
 
 def amount_map(path):
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError()
+            result[key] = value
+        return result
     try:
-        value = json.loads(Path(path).read_text(encoding='utf-8'))
+        value = json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique_keys)
         if not isinstance(value, dict):
             raise ValueError()
         for key, target in value.items():
@@ -239,7 +246,20 @@ class Api:
 
 def socket_client():
     import socketio
+    import engineio
     import websocket
+
+    class OrderedEngineIO(engineio.Client):
+        def _trigger_event(self, event, *args, **kwargs):
+            # Engine.IO 3.14.2 otherwise dispatches each message in a new thread.
+            # Keep wire order and finish durable receipt before reading the next.
+            if event == 'message':
+                kwargs['run_async'] = False
+            return super()._trigger_event(event, *args, **kwargs)
+
+    class OrderedSocketIO(socketio.Client):
+        def _engineio_client_class(self):
+            return OrderedEngineIO
     # logger=False still logs fatal errors in these versions. Use a silent logger.
     silent = logging.Logger('enjaptoi-private-socket')
     silent.addHandler(logging.NullHandler())
@@ -253,7 +273,7 @@ def socket_client():
         if ca:
             os.environ['WEBSOCKET_CLIENT_CA_BUNDLE'] = ca
     websocket.setdefaulttimeout(10)
-    return socketio.Client(reconnection=False, logger=silent, engineio_logger=silent,
+    return OrderedSocketIO(reconnection=False, logger=silent, engineio_logger=silent,
                            request_timeout=10, ssl_verify=True)
 
 
@@ -274,6 +294,26 @@ class Session:
         self.client.on('DONATION', self.donation)
         self.client.on('disconnect', self.disconnected)
 
+    def fail(self, error):
+        with self.guard:
+            if self.closed:
+                return
+            self.accepting = False
+            # Storage/protocol/revocation errors must survive later disconnects.
+            if self.failure is None or (isinstance(self.failure, TransientError)
+                                        and not isinstance(error, TransientError)):
+                self.failure = error
+
+    def check_failure(self):
+        with self.guard:
+            if self.failure:
+                raise self.failure
+
+    def check_fatal(self):
+        with self.guard:
+            if self.failure and not isinstance(self.failure, TransientError):
+                raise self.failure
+
     def system(self, payload):
         if self.closed:
             return
@@ -282,15 +322,13 @@ class Session:
             data = event.get('data')
             if (event.get('type') in ('revoked', 'unsubscribed') and isinstance(data, dict)
                     and data.get('eventType') == 'DONATION' and data.get('channelId') == self.intake.channel):
-                with self.guard:
-                    self.accepting = False
+                self.fail(ReceiverError('후원 구독 권한이 취소됐습니다. 권한을 확인하고 다시 시작하세요.'))
             self.events.put_nowait(event)
         except (ReceiverError, queue.Full):
-            self.failure = ReceiverError('시스템 이벤트 처리 실패. 수신을 중단합니다.')
+            self.fail(ReceiverError('시스템 이벤트 처리 실패. 수신을 중단합니다.'))
 
     def disconnected(self):
-        if not self.closed:
-            self.failure = TransientError('연결이 끊겼습니다. 새 세션을 생성합니다.')
+        self.fail(TransientError('연결이 끊겼습니다. 새 세션을 생성합니다.'))
 
     def donation(self, payload):
         with self.guard:
@@ -299,23 +337,23 @@ class Session:
             try:
                 self.intake.receive(payload)
             except ReceiverError:
-                # Invalid content is never printed or sent to the game.
-                pass
+                self.fail(ReceiverError('후원 메시지 형식이 올바르지 않습니다. 수신을 중단합니다.'))
             except Exception:
                 # Fail closed on disk/storage failure; no unpersisted delivery.
-                self.failure = ReceiverError('수신 이벤트 저장 실패. 수신을 중단합니다.')
+                self.fail(ReceiverError('수신 이벤트 저장 실패. 수신을 중단합니다.'))
 
     def connect(self):
         url = self.api.session()
         try:
             self.client.connect(url, transports=['websocket'])
         except Exception:
+            self.check_failure()
             raise TransientError('소켓 연결 실패. 새 세션을 생성합니다.') from None
 
     def step(self):
-        if self.failure:
-            raise self.failure
+        self.check_failure()
         while not self.events.empty():
+            self.check_failure()
             event = self.events.get_nowait()
             data = event.get('data')
             if not isinstance(data, dict):
@@ -326,16 +364,28 @@ class Session:
                 if not isinstance(key, str) or not key or len(key) > 4096:
                     raise ReceiverError('세션 키 형식이 올바르지 않습니다.')
                 if self.key is not None:
+                    if self.key != key:
+                        raise TransientError('세션 키가 변경됐습니다. 새 세션을 생성합니다.')
                     continue
-                self.key = key
-                self.accepting = True
-                self.api.subscribe(key)
+                with self.guard:
+                    self.check_failure()
+                    self.key = key
+                    self.accepting = True
+                try:
+                    self.api.subscribe(key)
+                except (ReceiverError, oauth.OAuthError) as error:
+                    self.fail(error)
+                    self.check_failure()
+                self.check_failure()
             elif data.get('eventType') == 'DONATION' and data.get('channelId') == self.intake.channel:
                 if kind == 'subscribed':
+                    if self.key is None or not self.accepting:
+                        raise ReceiverError('요청하지 않은 후원 구독 확인을 받았습니다.')
                     self.subscribed = True
                 elif kind in ('revoked', 'unsubscribed'):
                     self.accepting = False
                     raise ReceiverError('후원 구독 권한이 취소됐습니다. 권한을 확인하고 다시 시작하세요.')
+        self.check_failure()
         if not self.subscribed and self.clock() >= self.deadline:
             raise TransientError('후원 구독 확인 시간 초과. 새 세션을 생성합니다.')
 
@@ -379,12 +429,16 @@ def run(api, intake, journal, token_file, port=18765, stop=None,
                     # Proactive renewal via a fresh session; old URL is never reused.
                     if time.time() + 60 >= api.tokens.expires_at:
                         session.close()
+                        session.check_fatal()
                         session = None
                         retry_at = now
+                    if session:
+                        session.check_failure()
             except TransientError as e:
-                print(str(e))  # Fixed messages only, never exception repr/response.
                 if session:
                     session.close()
+                    session.check_fatal()
+                print(str(e))  # Fixed messages only, never exception repr/response.
                 session = None
                 failures += 1
                 retry_at = now + min(60, 2 ** min(failures, 6))

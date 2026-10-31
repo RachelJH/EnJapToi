@@ -229,3 +229,5 @@ npm ci --prefix tests/socketio2 --ignore-scripts
 로컬 전용 Socket.IO **2.0.3** 서버와 실제 Engine.IO 3 WebSocket 연결, 강제 연결 해제 후 새 세션·재구독, 모의 Paper 응답 유실과 같은 ID 재시도를 검증합니다. 로컬 테스트에서만 HTTPS 주소를 loopback HTTP로 바꿔 접속하며, 운영 코드는 HTTPS 검증을 유지합니다. Node 24에서는 구형 라이브러리의 `url.parse` 사용 경고가 나올 수 있습니다. 테스트 fixture는 외부에 공개하거나 운영 서버로 사용하지 마세요. Node가 없으면 이 통합 테스트는 건너뜁니다. Windows DPAPI 테스트도 Linux에서는 건너뜁니다.
 
 공식 근거: [Session](https://chzzk.gitbook.io/chzzk/chzzk-api/session), [Authorization](https://chzzk.gitbook.io/chzzk/chzzk-api/authorization), [인증 헤더·공통 응답](https://chzzk.gitbook.io/chzzk/chzzk-api/tips), [User](https://chzzk.gitbook.io/chzzk/chzzk-api/user). 실제 계정·후원, 원/치즈 대응, 실제 소켓 호스트·권한 승인·재연결 동작과 플레이어 게임 효과는 친구 PC에서 별도 검증해야 합니다.
+
+병합 전 상태 경합·장애·토큰 전달 경로 리뷰와 남은 Paper 저장 한계는 [코드 리뷰 기록](docs/chzzk-donations-review.md)에 정리했습니다. 수신 메시지는 wire 순서로 처리하며, 저장 실패·권한 취소는 후속 disconnect로 덮지 않고 중단합니다. Paper로 보내는 loopback 요청은 환경 HTTP 프록시와 리디렉션을 사용하지 않습니다. 금액 JSON에 같은 키가 두 번 있으면 실행을 거부합니다.
