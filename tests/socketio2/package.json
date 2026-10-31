@@ -1,0 +1,7 @@
+{
+  "name": "enjaptoi-socketio2-test-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local-only compatibility fixture, never a production server",
+  "dependencies": { "socket.io": "2.0.3" }
+}

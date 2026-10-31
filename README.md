@@ -1,6 +1,6 @@
 # 엔잡퇴 v0.1 — Paper 플러그인 소스 + 로컬 후원 시뮬레이터
 
-**상태: Java 25 빌드·Paper 26.3 빌드 230 서버 통합 검증 완료·게임 내 효과 미검증 개발 초안. 치지직 OAuth 인증 도구를 포함하며, 실시간 후원 수신은 아직 구현하지 않았습니다.**
+**상태: Java 25 빌드·Paper 26.3 빌드 230 서버 통합 검증 완료·게임 내 효과 미검증 개발 초안. 공식 치지직 OAuth·실시간 후원 수신기를 포함하며, 실제 계정·후원 및 금액 대응은 추가 검증이 필요합니다.**
 
 대상: Windows / Java 25 / 사용자 제공 Paper 26.3 / 방송인 `Yirue`.
 
@@ -44,7 +44,7 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 - 메시지의 공백으로 분리된 정확한 명령어만 인식하며 여러 명령어가 있으면 첫 번째를 사용.
 
 ## 반드시 해결해야 할 항목
-1. **실시간 치지직 후원 수신 미구현.** OAuth 도구는 추가했지만 실제 계정 인증은 미검증입니다. 후원 세션 수신, 금액 단위와 이벤트 식별 정책 검증 및 별도 어댑터 구현이 필요합니다. `bridge.py`는 계속 로컬 시뮬레이터입니다.
+1. **실제 치지직 계정·후원 미검증.** 공식 세션 수신기를 추가했지만 금액 대응과 실제 Scope 승인·후원 수신은 실행 PC에서 검증해야 합니다. 공식 후원 고유 ID와 누락분 재생 명세가 없어 완전한 중복·누락 방지를 보장하지 않습니다. `bridge.py`는 계속 로컬 시뮬레이터입니다.
 2. **실제 게임 효과 미검증.** Paper 26.3 빌드 230에서 서버 통합 검증을 완료했으며, 플레이어가 접속한 상태의 게임 효과와 비정상 종료 시 복구는 별도 테스트가 필요합니다.
 3. 상태 파일의 이벤트 실행 전 저장 구조는 강제 종료 순간 이벤트 유실 가능. 금전성 이벤트에 대해 원자적 상태 저장/실행 전후 기록/관리자 재처리 기능 필요.
 4. `received` 목록은 무한히 커지므로 운영 전 보존 정책 필요.
@@ -64,7 +64,7 @@ python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:
 
 ## 치지직 OAuth 인증 (친구 Windows PC)
 
-이 기능은 **로그인·토큰 발급·갱신만** 처리합니다. 로그인해도 실제 후원은 아직 Minecraft로 전달되지 않습니다. Paper 26.3 빌드 230과 Java 25, 기존 게임 규칙에는 변화가 없습니다. 인증 단계에서는 Paper 서버를 켜지 않아도 됩니다.
+`oauth.py`는 **로그인·토큰 발급·갱신만** 처리합니다. 실제 후원을 전달하려면 아래 실시간 수신기를 별도로 실행해야 합니다. Paper 26.3 빌드 230과 Java 25, 기존 게임 규칙에는 변화가 없습니다. 인증 단계에서는 Paper 서버를 켜지 않아도 됩니다.
 
 ### 1. 준비
 
@@ -105,7 +105,7 @@ python bridge/oauth.py status
 python bridge/oauth.py refresh
 ```
 
-`status`는 토큰을 노출하지 않고 로컬 저장과 만료 임박 여부만 확인합니다. **방송인 계정·권한·서버 측 유효성을 확인하는 API 호출은 하지 않습니다.** 공식 문서상 Access Token은 1일, Refresh Token은 30일이며 갱신 토큰은 일회용입니다. `refresh`는 현재 환경변수/설정 파일로 새 토큰을 요청하고 새 Refresh Token까지 함께 교체 저장합니다. 미래 수신기에서 사용할 `refresh_tokens()`는 만료 60초 전부터 갱신할 수 있도록 구현했지만, 현재 상시 실행·자동 갱신 프로세스는 없습니다.
+`status`는 토큰을 노출하지 않고 로컬 저장과 만료 임박 여부만 확인합니다. **방송인 계정·권한·서버 측 유효성을 확인하는 API 호출은 하지 않습니다.** 공식 문서상 Access Token은 1일, Refresh Token은 30일이며 갱신 토큰은 일회용입니다. `refresh`는 현재 환경변수/설정 파일로 새 토큰을 요청하고 새 Refresh Token까지 함께 교체 저장합니다. 미래 수신기에서 사용할 `refresh_tokens()`는 만료 60초 전부터 갱신할 수 있도록 구현했지만, 아래 수신기는 이 함수를 재사용해 만료 전 갱신과 새 세션 연결을 처리합니다. OAuth 도구 단독 실행은 상시 갱신하지 않습니다.
 
 갱신 중 통신이나 저장에 실패했다면 기존 Refresh Token이 이미 사용됐을 수 있습니다. 반복 재시도하지 말고 `login`으로 다시 인증하세요. 새 인증 정보를 저장한 뒤 이전 저장 파일로 되돌리지 마세요.
 
@@ -129,7 +129,103 @@ Remove-Item Env:CHZZK_CLIENT_ID, Env:CHZZK_CLIENT_SECRET -ErrorAction SilentlyCo
 
 - [Authorization](https://chzzk.gitbook.io/chzzk/chzzk-api/authorization): 인증 요청, `state`, 토큰 발급·갱신, 일회용 Refresh Token.
 - [API 공통 안내](https://chzzk.gitbook.io/chzzk/chzzk-api/tips): 공식 API 도메인·인증 규격.
-- [Session](https://chzzk.gitbook.io/chzzk/chzzk-api/session): 후원 조회 권한. 실시간 수신은 이번 범위 밖입니다.
-- [User](https://chzzk.gitbook.io/chzzk/chzzk-api/user): 유저 정보 조회 권한. 사용자 정보 API 호출도 아직 추가하지 않았습니다.
+- [Session](https://chzzk.gitbook.io/chzzk/chzzk-api/session): 후원 조회 권한. 실시간 수신기는 아래 절차를 따릅니다.
+- [User](https://chzzk.gitbook.io/chzzk/chzzk-api/user): 유저 정보 조회 권한. 수신기는 `/open/v1/users/me`로 설정한 방송인 채널과 인증 계정이 같은지 확인합니다.
 
 모의 검증은 `python -m unittest discover -s tests -v`로 실행합니다. 테스트는 고정된 localhost 콜백 포트를 사용하므로 OAuth 작업과 동시에 실행하지 마세요. 외부 계정·API에는 연결하지 않고 브라우저와 토큰 API를 대체합니다. Windows에서는 같은 테스트가 DPAPI 저장 왕복도 검사하며, Linux에서는 해당 검사를 건너뜁니다. 실제 계정 승인, 실제 토큰 발급·갱신, 권한 승인 결과 및 Windows 브라우저/DPAPI 동작은 실행 PC에서 추가 검증해야 합니다.
+
+
+## 공식 치지직 실시간 후원 수신 (Windows PC 한 대)
+
+친구 PC에서 **Paper 서버 창과 수신기 PowerShell 창을 각각 하나씩** 실행합니다. 브라우저 OAuth와 수신기도 같은 Windows 사용자 계정을 사용합니다. Paper는 기존처럼 Java 25 / 빌드 230으로 실행하며 게임 규칙은 바꾸지 않습니다. 실제 계정·후원을 사용한 검증은 아직 수행하지 않았습니다.
+
+### 설치와 로그인
+
+저장소 루트에서 다음 명령을 실행합니다. 가상환경 활성화 스크립트나 PowerShell 실행 정책 변경은 필요 없습니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r bridge/requirements.txt
+```
+
+위 OAuth 절차처럼 `CHZZK_CLIENT_ID`, `CHZZK_CLIENT_SECRET`을 현재 창에 입력한 후, 같은 가상환경으로 인증합니다.
+
+```powershell
+.\.venv\Scripts\python.exe bridge/oauth.py login
+```
+
+이미 같은 계정에서 인증한 `bridge\.local\tokens.dat`가 있으면 재사용합니다. 앱의 `후원 조회`와 공식 문서상 `유저 정보 조회` 권한이 필요합니다. 사용자 Scope 승인을 바꿨다면 다시 로그인하세요. 본인의 방송 채널 ID도 확인해 둡니다. 채널 ID는 닉네임이나 Minecraft 이름 `Yirue`가 아니라 치지직 채널 식별자입니다. [User API](https://chzzk.gitbook.io/chzzk/chzzk-api/user)에 공식 조회 규격이 있습니다. 수신기는 제공한 ID와 `/open/v1/users/me`가 다르면 중단합니다.
+
+### 금액 대응을 먼저 결정하세요
+
+공식 후원 메시지의 `payAmount`는 **원 단위 문자열**입니다. 기존 게임 규칙의 치즈 금액과 같다고 자동 가정하지 않습니다. 기본 매핑을 제공하지 않으며, 실행 시 JSON 파일을 반드시 지정해야 합니다.
+
+먼저 관찰 모드 파일을 만듭니다. 이 명령은 기존 파일이 있으면 덮어쓰지 않습니다.
+
+```powershell
+New-Item -ItemType Directory -Force bridge\.local | Out-Null
+if (!(Test-Path bridge\.local\amount-map.json)) { Set-Content -Encoding ASCII bridge\.local\amount-map.json '{}' }
+```
+
+`{}`이면 새 후원을 집계만 하고 게임에 전달하지 않습니다. 후원자 정보와 메시지·금액 원문은 로그에 출력하거나 저장하지 않습니다. 관찰 모드도 **과거에 저장한 미전달 게임 이벤트는 재시도**합니다. 처음부터 게임 전달을 막으려면 Paper 콘솔에서 `ejt pause`를 사용하고 대기열도 확인하세요. 관찰 중 제외된 후원은 이후 매핑을 바꿔도 재처리할 수 없습니다.
+
+실제 금액 대응을 확인한 후에만 메모장으로 `bridge\.local\amount-map.json`을 편집합니다. 키는 수신 `payAmount` 그대로의 양의 정수 문자열, 값은 기존 규칙의 `1000`, `2000`, `5000`, `30000` 중 하나입니다. 다음은 **형식 설명용이며 대응이 검증됐다는 뜻이 아닙니다**.
+
+```json
+{"1000": 1000}
+```
+
+이 설정을 선택하면 `payAmount="1000"`에 기존 1,000치즈 게임 규칙을 적용하겠다는 사용자 설정입니다. 실검증 전에는 `{}`를 유지하세요. 매핑에 없는 금액, 선택하지 않은 후원 유형, 규칙에 맞지 않는 명령어는 `제외`로 집계합니다. 기존 `select_event()`를 그대로 사용하므로 명령어 우선순위와 룰렛·즉사 규칙도 동일합니다.
+
+### 실행
+
+1. Paper 서버를 실행하고 `ejt status`로 플러그인 활성화를 확인합니다.
+2. 아래 경로와 채널 ID를 실제 값으로 바꿉니다. 토큰 **파일 경로**를 지정하며 파일 내용은 복사하지 않습니다.
+
+```powershell
+.\.venv\Scripts\python.exe bridge/receiver.py --channel-id "방송인의_실제_채널_ID" --amount-map bridge\.local\amount-map.json --token-file "C:\MinecraftServer\plugins\EnJapToi\bridge-token.txt"
+```
+
+환경변수 대신 클라이언트 설정 파일을 사용한다면 `--config bridge\.local\client.json`을 추가합니다. 기본 수신 대상은 `donationType=CHAT`입니다. 영상 후원도 별도로 검증하려면 `--donation-type VIDEO`를 명시합니다. 한 실행에서 선택한 한 유형만 처리하며, 검증 없이 영상 후원을 게임에 적용하지 마세요.
+
+- `공식 후원 구독 확인 완료`가 표시돼야 구독 확인을 받은 상태입니다. 분당 대기·완료·제외 건수를 출력합니다.
+- `Paper 전달: queued`는 Paper 대기열 등록, `duplicate`는 같은 로컬 ID가 이미 등록됐음을 뜻합니다. **게임 내 실행 완료를 뜻하지 않습니다.** Yirue가 오프라인이면 기존 플러그인 대기열에 남습니다.
+- Paper가 꺼져 있거나 토큰 파일·응답에 문제가 있으면 같은 로컬 ID와 같은 효과로 재시도합니다. 재시도 간격은 최대 60초까지 늘어납니다. 먼저 오래된 대기 이벤트를 처리합니다.
+- 종료는 수신기 창에서 **Ctrl+C**입니다. 정상 종료 후 다음 실행은 SQLite 미전달 이벤트를 이어서 처리합니다. 컴퓨터를 다시 켠 뒤에는 Paper와 수신기를 각각 다시 실행하세요.
+- 수신기를 동시에 두 개 실행하지 마세요. `receiver.lock`으로 중복 프로세스를 차단합니다. 잠금이 남으면 모든 수신기가 종료됐음을 확인한 뒤에만 `bridge\.local\receiver.lock`을 삭제합니다. OAuth의 `tokens.dat.lock`과는 다른 잠금입니다.
+
+### 연결·토큰 갱신과 복구 범위
+
+공식 `GET /open/v1/sessions/auth` → Socket.IO 연결 → `SYSTEM connected`의 sessionKey → `POST /open/v1/sessions/events/subscribe/donation?sessionKey=...` → `SYSTEM subscribed` → `DONATION` 순서로 처리합니다. 구독 요청 중 도착한 이벤트도 채널과 유형을 확인해 저장합니다.
+
+Socket.IO 자체의 자동 재연결을 끄고, 연결 중단·연결/구독 시간 초과·일시 API 오류 시 지수 간격으로 **새 URL·새 세션·새 구독**을 만듭니다. Access Token 만료 60초 전에는 연결을 정리하고 기존 OAuth 함수를 통해 갱신 후 새 세션을 만듭니다. REST API 401은 갱신 후 한 번만 재요청합니다. 갱신 실패·저장 실패·권한 취소는 중단하므로, 반복 강제 재시도하지 말고 원인 해결 후 다시 OAuth 로그인하세요. 수신기 실행 중 별도로 `oauth.py login/refresh`를 실행하지 마세요.
+
+`bridge\.local\donations.sqlite3`에는 로컬 랜덤 ID, 선택된 효과, 대기/완료/제외 상태, 재시도 정보와 대상 채널의 해시만 저장합니다. 후원자 ID·닉네임·메시지·금액 원문·OAuth 토큰·세션 URL은 저장하지 않습니다. Windows에서는 사용자 전용 폴더에 보관하고 공유·공용 동기화 폴더는 피하세요. DB는 개인정보 원문을 담지 않는 로컬 처리 기록이며 DPAPI 암호화 파일은 아닙니다. Linux는 소유자 전용 권한을 적용합니다. SQLite 트랜잭션과 FULL 동기화를 사용하며 룰렛 결과는 전달 전에 한 번만 결정해 저장합니다.
+
+**보장할 수 없는 부분:**
+- 공식 후원 메시지에는 고유 후원 ID가 명시돼 있지 않습니다. 같은 내용이 치지직에서 두 번 수신되면 서로 다른 로컬 이벤트가 됩니다. 금액·닉네임·메시지 해시로 임의 중복 제거하지 않습니다.
+- 로컬 저장 이후 Paper 재시도의 ID는 같게 유지합니다. 하지만 치지직 단계의 완벽한 중복 방지나 단 한 번 실행을 보장하지 않습니다.
+- 연결 중단 중 발생하거나 로컬 저장 전에 유실된 후원을 자동 복구할 공식 이력·재생 API는 확인되지 않았습니다. 세션 목록 90일 조회는 후원 내역 조회가 아닙니다.
+- Paper 플러그인의 비원자적 상태 저장, 저장 실패 및 강제 종료 순간의 게임 실행 유실 문제는 이번 변경에서 고치지 않았습니다.
+- 처리 기록은 자동 삭제하지 않습니다. 파일을 삭제하면 대기 이벤트가 유실될 수 있으므로 임의로 지우지 마세요. 백업은 수신기를 정상 종료한 상태에서 합니다. 실서비스 보존·정리 정책은 후속 작업입니다.
+
+공식 API 도메인은 `openapi.chzzk.naver.com`, 사용자 인증은 `chzzk.naver.com`입니다. Socket.IO 호스트는 공식 API 응답에 따라 달라집니다(문서 예: `ssio08.nchat.naver.com`). 방화벽·Codex 네트워크 제한에서는 실제 반환 호스트의 HTTPS/WebSocket 접근도 필요하며, 인증 토큰이 포함된 URL 전체를 로그나 지원 요청에 붙이지 마세요. TLS 검증과 기존 프록시는 유지합니다.
+
+### 버전 호환성과 모의 검증
+
+공식 문서는 Socket.IO-client 1.0.0~2.0.3을 안내합니다. 이에 맞는 `python-socketio==4.6.1` / `python-engineio==3.14.2`와 전송 의존성을 `bridge/requirements.txt`로 고정했습니다. Python Socket.IO 5.x로 임의 업그레이드하지 마세요. 이 구형 프로토콜 사용은 공식 명세와의 호환성을 위한 것이며, 실제 치지직 서버·Windows에서의 검증까지 끝났다는 뜻은 아닙니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+실제 계정 없이 금액 검증, 개인정보 미저장, 같은 ID/효과 재시도, 저장 후 재시작, 응답 유실, OAuth 갱신, 권한 취소와 시간 초과를 검사합니다. Socket.IO 실제 프로토콜 통합 테스트까지 실행하려면 테스트용으로만 Node.js와 npm을 설치한 뒤 다음을 실행합니다. **운영 수신기에는 Node.js가 필요 없습니다.**
+
+```powershell
+npm ci --prefix tests/socketio2 --ignore-scripts
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+로컬 전용 Socket.IO **2.0.3** 서버와 실제 Engine.IO 3 WebSocket 연결, 강제 연결 해제 후 새 세션·재구독, 모의 Paper 응답 유실과 같은 ID 재시도를 검증합니다. 로컬 테스트에서만 HTTPS 주소를 loopback HTTP로 바꿔 접속하며, 운영 코드는 HTTPS 검증을 유지합니다. Node 24에서는 구형 라이브러리의 `url.parse` 사용 경고가 나올 수 있습니다. 테스트 fixture는 외부에 공개하거나 운영 서버로 사용하지 마세요. Node가 없으면 이 통합 테스트는 건너뜁니다. Windows DPAPI 테스트도 Linux에서는 건너뜁니다.
+
+공식 근거: [Session](https://chzzk.gitbook.io/chzzk/chzzk-api/session), [Authorization](https://chzzk.gitbook.io/chzzk/chzzk-api/authorization), [인증 헤더·공통 응답](https://chzzk.gitbook.io/chzzk/chzzk-api/tips), [User](https://chzzk.gitbook.io/chzzk/chzzk-api/user). 실제 계정·후원, 원/치즈 대응, 실제 소켓 호스트·권한 승인·재연결 동작과 플레이어 게임 효과는 친구 PC에서 별도 검증해야 합니다.
