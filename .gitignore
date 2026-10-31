@@ -1,3 +1,5 @@
 /paper-plugin/target/
 /bridge/.local/
 **/__pycache__/
+/tests/socketio2/node_modules/
+/.venv/
