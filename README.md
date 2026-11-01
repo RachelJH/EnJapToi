@@ -340,3 +340,11 @@ receiver:
 예를 들어 `TOKEN_HTTP_401`과 `TOKEN_RESPONSE_SCHEMA (HTTP 200)`, `LOCAL_TOKEN_SAVE`는 서로 다른 단계입니다. 지원 요청에는 진단 코드와 숫자 HTTP 상태만 공유하세요. 브라우저 주소·원문 응답·토큰 파일·설정의 비밀값을 붙이지 마세요. 실패한 인증 코드나 일회용 Refresh Token을 자동 재시도하지 않으며, 설정 확인 후 새 로그인으로 다시 인증합니다. state 검증, 토큰 보호 저장, 파일 잠금, TLS 검증과 로그 비공개 정책은 유지합니다.
 
 OAuth `TOKEN_HTTP_401` 요청 검토: [공식 문서와 요청 URL·POST·JSON·필드 대조 및 입력 출처 확인](docs/oauth-request-review.md). 요청 형식 자체는 확인한 명세와 일치합니다. 환경변수/파일의 ID·Secret 혼합은 차단했지만 실제 401 원인을 확정한 것은 아닙니다.
+
+### HTTP 401의 공식 오류 코드 구분
+
+[치지직 공식 API 공통 오류 규격](https://chzzk.gitbook.io/chzzk/chzzk-api/tips)은 HTTP 401의 Error Message로 `INVALID_CLIENT`, `UNAUTHORIZED`, `INVALID_TOKEN`을 나열하며 실패 JSON의 필드는 `code`, `message`입니다.
+
+토큰 API가 HTTP 401을 반환하면 본문을 최대 4KB(+크기 초과 확인 1바이트)까지만 메모리에서 검사합니다. 최상위 `message`가 위 세 문자열 중 하나와 **정확히** 일치할 때만 CMD와 브라우저에 표시합니다. 예: `[TOKEN_HTTP_401] ... (HTTP 401) / API INVALID_CLIENT`. Client ID/Secret, 인증 코드/state, 토큰, 본문 전체·부분, 헤더·URL, 원본 예외는 출력하거나 저장하지 않습니다.
+
+알 수 없는 코드, 설명이 덧붙은 문자열, 다른 필드의 코드, JSON 오류·중복 키·크기 초과·본문 읽기 실패는 원문을 숨기고 기존 HTTP 401 및 `공식 오류 코드 확인 불가`만 표시합니다. 다른 HTTP 상태의 본문은 검사하지 않습니다. 허용 코드도 Client 설정 등의 구체적 오입력 원인을 확정하는 증거는 아닙니다. 실패한 인증 코드·Refresh Token을 자동 재시도하지 않습니다. 지원 요청에는 안전한 진단 코드·HTTP 상태·허용된 API 코드만 공유하세요.

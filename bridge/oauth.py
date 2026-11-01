@@ -24,6 +24,9 @@ REDIRECT_URI = 'http://127.0.0.1:18766/callback'
 AUTHORIZE_URL = 'https://chzzk.naver.com/account-interlock'
 TOKEN_URL = 'https://openapi.chzzk.naver.com/auth/v1/token'
 LOCAL = Path(__file__).resolve().parent / '.local'
+# Official Error Message values for HTTP 401, not arbitrary response text.
+TOKEN_401_CODES = frozenset({'INVALID_CLIENT', 'UNAUTHORIZED', 'INVALID_TOKEN'})
+ERROR_BODY_LIMIT = 4096
 
 
 class OAuthError(Exception):
@@ -40,13 +43,16 @@ class TokenAPIError(OAuthError):
         'unknown': ('TOKEN_API_UNKNOWN', '토큰 발급 처리 실패 (안전하게 분류할 수 없는 오류)'),
     }
 
-    def __init__(self, category, http_status=None):
+    def __init__(self, category, http_status=None, api_code=None):
         self.category = category if isinstance(category, str) and category in self.MESSAGES else 'unknown'
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        self.api_code = api_code if (self.category == 'http' and self.http_status == 401
+                                    and isinstance(api_code, str) and api_code in TOKEN_401_CODES) else None
         code, message = self.MESSAGES[self.category]
         self.diagnostic_code = code + (f'_{self.http_status}' if self.category == 'http' and self.http_status is not None else '')
         status = f' (HTTP {self.http_status})' if self.http_status is not None else ''
-        super().__init__(f'[{self.diagnostic_code}] {message}{status}. 자동 재시도하지 않습니다. 설정 확인 후 다시 로그인하세요.')
+        api = f' / API {self.api_code}' if self.api_code else (' / 공식 오류 코드 확인 불가' if self.category == 'http' and self.http_status == 401 else '')
+        super().__init__(f'[{self.diagnostic_code}] {message}{status}{api}. 자동 재시도하지 않습니다. 설정 확인 후 다시 로그인하세요.')
 
 
 class TokenStorageError(OAuthError):
@@ -207,6 +213,29 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def allowed_401_code(error):
+    """Inspect a bounded error body in memory; return only an exact allowlist member."""
+    if type(error.code) is not int or error.code != 401:
+        return None
+    try:
+        raw = error.read(ERROR_BODY_LIMIT + 1)
+        if len(raw) > ERROR_BODY_LIMIT:
+            return None
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError()
+                result[key] = value
+            return result
+        body = json.loads(raw, object_pairs_hook=unique)
+        message = body.get('message') if isinstance(body, dict) else None
+        return message if isinstance(message, str) and message in TOKEN_401_CODES else None
+    except Exception:
+        # Malformed/oversized/partial/proxy error responses never reach diagnostics.
+        return None
+
+
 def post_token(body):
     req = urllib.request.Request(TOKEN_URL, data=json.dumps(body).encode(),
                                  headers={'Content-Type': 'application/json'}, method='POST')
@@ -221,8 +250,11 @@ def post_token(body):
             data = json.loads(raw)
     except urllib.error.HTTPError as e:
         code = e.code
-        e.close()
-        raise TokenAPIError('http', code) from None
+        try:
+            api_code = allowed_401_code(e)
+        finally:
+            e.close()
+        raise TokenAPIError('http', code, api_code) from None
     except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
         raise TokenAPIError('network', status) from None
     except ValueError:
@@ -348,11 +380,14 @@ class CallbackHandler(BaseHTTPRequestHandler):
                 raise TokenAPIError('schema')
         except TokenAPIError as error:
             # Reconstruct from allowlisted metadata; never propagate exception text.
-            s.failure = TokenAPIError(error.category, error.http_status)
+            s.failure = TokenAPIError(error.category, error.http_status, error.api_code)
         except urllib.error.HTTPError as error:
             code = error.code
-            error.close()
-            s.failure = TokenAPIError('http', code)
+            try:
+                api_code = allowed_401_code(error)
+            finally:
+                error.close()
+            s.failure = TokenAPIError('http', code, api_code)
         except (OSError, http.client.HTTPException):
             s.failure = TokenAPIError('network')
         except (ValueError, TypeError):
@@ -363,7 +398,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
             # BaseHTTPRequestHandler must not print a raw unexpected exception.
             s.failure = TokenAPIError('unknown')
         if s.failure:
-            self.reply(502, f'Authentication failed [{s.failure.diagnostic_code}]. Return to the terminal.')
+            api = f'; API {s.failure.api_code}' if s.failure.api_code else ''
+            self.reply(502, f'Authentication failed [{s.failure.diagnostic_code}{api}]. Return to the terminal.')
             return
         try:
             tokens['clientId'] = s.client_id
