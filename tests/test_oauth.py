@@ -237,8 +237,10 @@ class OAuthTests(unittest.TestCase):
             for status in (400,401,403,429,500,302):
                 body=io.BytesIO(b'mock-sensitive-response-body')
                 opener.open.side_effect=urllib.error.HTTPError('https://mock-sensitive',status,'mock-sensitive-reason',{},body)
-                with patch.object(body,'read',side_effect=AssertionError('must not read error body')):
+                with patch.object(body,'read',wraps=body.read) as reader:
                     with self.assertRaises(oauth.TokenAPIError) as error:oauth.post_token({})
+                if status == 401: reader.assert_called_once_with(oauth.ERROR_BODY_LIMIT+1)
+                else: reader.assert_not_called()
                 self.assertEqual(error.exception.diagnostic_code,'TOKEN_HTTP_'+str(status))
                 self.assertIn('HTTP '+str(status),str(error.exception))
                 self.assertNotIn('mock-sensitive',str(error.exception))
@@ -375,6 +377,91 @@ class OAuthTests(unittest.TestCase):
         self.assertIsNone(req.get_header('Authorization'))
         self.assertEqual(json.loads(req.data),{'grantType':'refresh_token','clientId':'mock-client',
             'clientSecret':'mock-secret','refreshToken':'mock-refresh-sensitive'})
+
+    def test_http401_only_official_message_codes_are_exposed(self):
+        opener=Mock()
+        with patch.object(oauth.urllib.request,'build_opener',return_value=opener):
+            for code in ('INVALID_CLIENT','UNAUTHORIZED','INVALID_TOKEN'):
+                raw=json.dumps({'code':401,'message':code,'clientId':'mock-sensitive-id',
+                    'clientSecret':'mock-sensitive-secret','accessToken':'mock-sensitive-token'}).encode()
+                body=io.BytesIO(raw)
+                opener.open.side_effect=urllib.error.HTTPError('mock-sensitive-url',401,'mock-sensitive-reason',{},body)
+                with self.subTest(code=code),self.assertRaises(oauth.TokenAPIError) as error:oauth.post_token({})
+                self.assertEqual(error.exception.api_code,code)
+                self.assertIn('API '+code,str(error.exception))
+                self.assertNotIn('mock-sensitive',str(error.exception))
+                self.assertTrue(body.closed)
+
+    def test_unrecognized_or_malformed_error_bodies_reveal_nothing(self):
+        bodies=[b'not-json mock-sensitive',b'',b'<html>mock-sensitive</html>',b'\xff\xfeinvalid',
+                b'{"message":"INVALID_CLIENT mock-sensitive"}',b'{"message":"invalid_client"}',
+                b'{"message":" INVALID_CLIENT"}',b'{"message":["INVALID_CLIENT"]}',
+                b'{"error":"INVALID_CLIENT","message":"mock-sensitive"}',
+                b'{"content":{"message":"INVALID_CLIENT"}}',b'["INVALID_CLIENT"]',
+                b'{"message":"INVALID_CLIENT","message":"UNAUTHORIZED"}',
+                b'{"message":"FORBIDDEN"}',b'{"message":"INVALID_CLIENT","extra":"'+b'x'*4096+b'"}']
+        for raw in bodies:
+            body=io.BytesIO(raw)
+            error=urllib.error.HTTPError('mock-sensitive-url',401,'mock-sensitive-reason',{},body)
+            with patch.object(oauth.urllib.request,'build_opener') as build:
+                build.return_value.open.side_effect=error
+                with self.subTest(size=len(raw)),self.assertRaises(oauth.TokenAPIError) as caught:oauth.post_token({})
+            self.assertIsNone(caught.exception.api_code)
+            self.assertIn('TOKEN_HTTP_401',str(caught.exception))
+            self.assertNotIn('mock-sensitive',str(caught.exception))
+            self.assertTrue(body.closed)
+        body=Mock();body.read.side_effect=OSError('mock-sensitive-read')
+        error=urllib.error.HTTPError('mock-sensitive-url',401,'mock-sensitive-reason',{},body)
+        self.assertIsNone(oauth.allowed_401_code(error))
+        body.read.assert_called_once_with(oauth.ERROR_BODY_LIMIT+1)
+
+    def test_callback_and_cmd_retain_only_allowlisted_official_error_code(self):
+        for code in ('INVALID_CLIENT','UNAUTHORIZED','INVALID_TOKEN','mock-sensitive-injection'):
+            failure=oauth.TokenAPIError('http',401,'INVALID_CLIENT')
+            failure.api_code=code # Revalidate even metadata at the callback boundary.
+            failure.args=('mock-sensitive-original-exception',)
+            def action(state):
+                status,body,_=self.callback('/callback?code=mock-sensitive-auth-code&state='+state)
+                self.assertEqual(status,502);self.assertNotIn(b'mock-sensitive',body)
+                if code in oauth.TOKEN_401_CODES:self.assertIn(code.encode(),body)
+                else:self.assertNotIn(b'API ',body)
+            errors,request=self.run_login(action,request=Mock(side_effect=failure))
+            self.assertEqual(errors[0].api_code,code if code in oauth.TOKEN_401_CODES else None)
+            request.assert_called_once()
+            output=io.StringIO()
+            with patch.object(oauth,'TokenStore',return_value=self.store), \
+                 patch.object(oauth,'credentials',return_value=('mock-sensitive-id','mock-sensitive-secret')), \
+                 patch.object(oauth,'login',side_effect=errors[0]),contextlib.redirect_stdout(output):
+                self.assertEqual(oauth.main(['login']),1)
+            self.assertNotIn('mock-sensitive',output.getvalue())
+            if code in oauth.TOKEN_401_CODES:self.assertIn('API '+code,output.getvalue())
+
+    def test_real_callback_exposes_code_but_never_the_http_error_body(self):
+        body=io.BytesIO(json.dumps({'code':401,'message':'INVALID_CLIENT',
+            'clientId':'mock-sensitive-id','clientSecret':'mock-sensitive-secret',
+            'codeEcho':'mock-sensitive-auth-code','accessToken':'mock-sensitive-token',
+            'refreshToken':'mock-sensitive-refresh'}).encode())
+        opener=Mock();opener.open.side_effect=urllib.error.HTTPError('mock-sensitive-url',401,'mock-sensitive-reason',{},body)
+        real_build=urllib.request.build_opener
+        def route(*handlers):
+            return opener if any(isinstance(h,oauth.NoRedirect) for h in handlers) else real_build(*handlers)
+        def action(state):
+            status,page,_=self.callback('/callback?code=mock-sensitive-code&state='+state)
+            self.assertEqual(status,502)
+            self.assertIn(b'API INVALID_CLIENT',page)
+            self.assertNotIn(b'mock-sensitive',page)
+        with patch.object(oauth.urllib.request,'build_opener',side_effect=route):
+            errors,request=self.run_login(action,request=Mock(wraps=oauth.post_token))
+        self.assertEqual(errors[0].api_code,'INVALID_CLIENT')
+        self.assertNotIn('mock-sensitive',str(errors[0]))
+        self.assertTrue(body.closed);request.assert_called_once();opener.open.assert_called_once()
+        self.assertFalse(self.store.path.exists())
+
+    def test_api_code_constructor_rejects_unknown_status_or_code(self):
+        for status,code in [(401,'INVALID_CLIENT\nmock-sensitive'),(401,{'message':'INVALID_CLIENT'}),
+                            (403,'INVALID_CLIENT'),(True,'INVALID_CLIENT'),(401,None)]:
+            error=oauth.TokenAPIError('http',status,code)
+            self.assertIsNone(error.api_code);self.assertNotIn('mock-sensitive',str(error))
 
     @unittest.skipUnless(os.name == 'nt', 'Windows DPAPI requires a Windows user session')
     def test_windows_dpapi(self):
