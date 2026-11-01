@@ -30,10 +30,24 @@ class LifetimeTests(unittest.TestCase):
             receipts.add('bread')
             first,second=send.call_args_list
             self.assertEqual(first.args,second.args)
-            self.assertEqual(first.kwargs,{'instance':'new-instance'})
+            self.assertEqual(first.kwargs,{'instance':'new-instance','cheese':1000})
             self.assertEqual(receipts.counts()['done'],1)
             self.assertIsNone(receipts.pending())
             self.assertEqual([p.name for p in Path(d).iterdir()],['token'])
+
+    def test_notice_amount_uses_mapped_game_price_not_raw_krw_or_donor_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            token=Path(d)/'token';token.write_text('mock-token')
+            send=Mock(return_value='queued')
+            receipts=r.PaperReceipts(token,18765,'instance',Mock(alive=lambda:True),send)
+            intake=r.Intake(receipts,'channel',{'123':1000},allow_game_events=True)
+            intake.receive(dict(channelId='channel',donationType='CHAT',payAmount='123',
+                                donationText='!이동',donatorNickname='private <click:run_command>'))
+            self.assertEqual(send.call_count,1)
+            self.assertEqual(send.call_args.args[0],'move')
+            self.assertEqual(send.call_args.kwargs,{'instance':'instance','cheese':1000})
+            self.assertNotIn('private',repr(send.call_args))
+            self.assertNotIn('123',repr(send.call_args.kwargs))
 
     def test_server_offline_donations_never_replay_on_restart(self):
         with tempfile.TemporaryDirectory() as d:

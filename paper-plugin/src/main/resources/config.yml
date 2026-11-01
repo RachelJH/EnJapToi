@@ -1,6 +1,7 @@
 broadcaster: Yirue
 interval-ticks: 60
-random-teleport-radius: 300
+# !이동 uses a fixed safety cap of 50 blocks (legacy key retained for compatibility).
+random-teleport-radius: 50
 spawn-min-radius: 3
 spawn-max-radius: 7
 # Token is generated on first startup in the plugin data folder.

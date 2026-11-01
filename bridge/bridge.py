@@ -21,10 +21,12 @@ class _NoLocalRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
-def deliver(event, event_id, token, port, instance=None):
+def deliver(event, event_id, token, port, instance=None, cheese=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/event", data=f"{event_id}\t{event}".encode(),headers={"X-EJT-Token":token},method="POST")
     if instance is not None:
         req.add_header("X-EJT-Instance",instance)
+    if cheese is not None:
+        req.add_header("X-EJT-Cheese",str(cheese))
     # This credential is for loopback Paper only, never a proxy or redirect target.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoLocalRedirect())
     with opener.open(req,timeout=10) as resp:

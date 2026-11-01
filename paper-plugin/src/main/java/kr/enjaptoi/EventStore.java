@@ -9,7 +9,7 @@ import java.util.*;
 
 /** Durable receipts and execution intent; game effects are NOT DB transactions. */
 final class EventStore implements AutoCloseable {
-  record Event(String id, String effect) {}
+  record Event(String id, String effect, int cheese) {}
   enum Receipt { QUEUED, DUPLICATE, CONFLICT }
   @FunctionalInterface interface Committer { void commit(Connection c) throws SQLException; }
   @FunctionalInterface private interface Work<T> { T run() throws SQLException; }
@@ -35,6 +35,9 @@ final class EventStore implements AutoCloseable {
         s.execute("PRAGMA journal_mode=DELETE");
         s.execute("PRAGMA synchronous=FULL");
         s.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, effect TEXT, state TEXT NOT NULL CHECK(state IN ('PENDING','RUNNING','DONE','UNCERTAIN')))");
+        boolean hasCheese=false;
+        try(ResultSet columns=s.executeQuery("PRAGMA table_info(events)")){while(columns.next())if(columns.getString("name").equals("cheese"))hasCheese=true;}
+        if(!hasCheese)s.execute("ALTER TABLE events ADD COLUMN cheese INTEGER NOT NULL DEFAULT 0");
         s.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
       }
       transaction(() -> {
@@ -69,7 +72,9 @@ final class EventStore implements AutoCloseable {
     }
   }
 
-  synchronized Receipt enqueue(String id, String effect) throws SQLException {
+  synchronized Receipt enqueue(String id, String effect) throws SQLException {return enqueue(id,effect,0);}
+  synchronized Receipt enqueue(String id, String effect,int cheese) throws SQLException {
+    if(cheese!=0 && cheese!=DonationNotice.amount(effect))throw new IllegalArgumentException("Invalid cheese amount");
     if (!id.matches("[A-Za-z0-9_-]{1,100}") || !EFFECTS.contains(effect)) throw new IllegalArgumentException("Invalid event");
     return transaction(() -> {
       try (PreparedStatement q = db.prepareStatement("SELECT effect FROM events WHERE id=?")) {
@@ -79,6 +84,7 @@ final class EventStore implements AutoCloseable {
         }
       }
       insert(id,effect,"PENDING");
+      try(PreparedStatement update=db.prepareStatement("UPDATE events SET cheese=? WHERE id=?")){update.setInt(1,cheese);update.setString(2,id);update.executeUpdate();}
       return Receipt.QUEUED;
     });
   }
@@ -91,9 +97,9 @@ final class EventStore implements AutoCloseable {
     if (paused()) return null;
     return transaction(() -> {
       Event event;
-      try (Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT id,effect FROM events WHERE state='PENDING' ORDER BY rowid LIMIT 1")) {
+      try (Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT id,effect,cheese FROM events WHERE state='PENDING' ORDER BY rowid LIMIT 1")) {
         if (!r.next()) return null;
-        event = new Event(r.getString(1),r.getString(2));
+        event = new Event(r.getString(1),r.getString(2),r.getInt(3));
       }
       transition(event.id(),"PENDING","RUNNING");
       return event;

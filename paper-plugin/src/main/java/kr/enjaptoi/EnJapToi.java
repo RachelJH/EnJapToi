@@ -48,9 +48,9 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       }
       token = Files.readString(tokenFile.toPath(), StandardCharsets.UTF_8).trim();
       server = HttpServer.create(new InetSocketAddress(getConfig().getString("listen-host", "127.0.0.1"), getConfig().getInt("listen-port",18765)), 0);
-      server.createContext("/event", new BridgeEndpoint(token,serverInstance,(id,effect) ->
+      server.createContext("/event", BridgeEndpoint.managed(token,serverInstance,(id,effect,cheese) ->
         Bukkit.getScheduler().callSyncMethod(this, () -> {
-          try { return store.enqueue(id,effect); }
+          try { return store.enqueue(id,effect,cheese); }
           catch(SQLException e) { storageFailed=true;throw e; }
         }).get(5,TimeUnit.SECONDS)));
       server.start();
@@ -91,13 +91,14 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       EventStore.Event event=store.begin();
       if(event==null)return;
       lastExecution=now;
-      try { executeEvent(player,event.effect()); }
+      boolean applied;
+      try { applied=executeEvent(player,event.effect()); }
       catch(RuntimeException e) {
         store.uncertain(event.id());
         getLogger().severe("Event execution interrupted; marked UNCERTAIN and paused. Review before resuming.");
         return;
       }
-      store.complete(event.id());
+      DonationNotice.complete(store,event,applied,notice->Bukkit.broadcast(notice));
     } catch(SQLException e) {
       storageFailed=true;
       getLogger().severe("Event storage failed; execution stopped. Restart and review UNCERTAIN events.");
@@ -137,38 +138,31 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     } } catch(SQLException e) { storageFailed=true;sender.sendMessage("Event storage unavailable; restart and review state. Success cannot be confirmed."); }
     return true;
   }
-  private void executeEvent(Player p,String event) {
+  private boolean executeEvent(Player p,String event) {
     boolean success=true;
     switch(event) {
-      case "buff" -> {PotionEffectType[] t={PotionEffectType.SPEED,PotionEffectType.STRENGTH,PotionEffectType.REGENERATION,PotionEffectType.RESISTANCE,PotionEffectType.JUMP_BOOST,PotionEffectType.HASTE};p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],1200,0,true,true));}
-      case "debuff" -> {PotionEffectType[] t={PotionEffectType.SLOWNESS,PotionEffectType.WEAKNESS,PotionEffectType.MINING_FATIGUE,PotionEffectType.BLINDNESS,PotionEffectType.HUNGER,PotionEffectType.NAUSEA};p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],600,0,true,true));}
+      case "buff" -> {PotionEffectType[] t={PotionEffectType.SPEED,PotionEffectType.STRENGTH,PotionEffectType.REGENERATION,PotionEffectType.RESISTANCE,PotionEffectType.JUMP_BOOST,PotionEffectType.HASTE};success=p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],1200,0,true,true));}
+      case "debuff" -> {PotionEffectType[] t={PotionEffectType.SLOWNESS,PotionEffectType.WEAKNESS,PotionEffectType.MINING_FATIGUE,PotionEffectType.BLINDNESS,PotionEffectType.HUNGER,PotionEffectType.NAUSEA};success=p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],600,0,true,true));}
       case "bread" -> {Map<Integer,ItemStack> left=p.getInventory().addItem(new ItemStack(Material.BREAD,5));left.values().forEach(it->p.getWorld().dropItemNaturally(p.getLocation(),it));}
       case "pickaxe" -> {ItemStack item=new ItemStack(Material.DIAMOND_PICKAXE);Damageable meta=(Damageable)item.getItemMeta();meta.setDamage(item.getType().getMaxDurability()-1);item.setItemMeta(meta);Map<Integer,ItemStack> left=p.getInventory().addItem(item);left.values().forEach(it->p.getWorld().dropItemNaturally(p.getLocation(),it));}
       case "clear" -> {p.getInventory().clear();p.getInventory().setArmorContents(new ItemStack[4]);p.getInventory().setItemInOffHand(null);}
-      case "chancekill" -> {if(random.nextInt(100)<15)p.setHealth(0.0);}
+      case "chancekill" -> {success=random.nextInt(100)<15;if(success)p.setHealth(0.0);}
       case "kill" -> p.setHealth(0.0);
       case "mob" -> {EntityType[] types={EntityType.ZOMBIE,EntityType.SKELETON,EntityType.SPIDER,EntityType.CREEPER,EntityType.HUSK,EntityType.STRAY}; Location at=findSpawn(p);if(at==null)success=false;else p.getWorld().spawnEntity(at,types[random.nextInt(types.length)]);}
-      case "move" -> {Location at=findTeleport(p,false);if(at==null)success=false;else p.teleport(at);}
-      case "surface" -> {Location at=findTeleport(p,true);if(at==null)success=false;else p.teleport(at);}
+      case "move" -> {Location at=findTeleport(p,false);if(at==null)success=false;else success=p.teleport(at);}
+      case "surface" -> {Location at=findTeleport(p,true);if(at==null)success=false;else success=p.teleport(at);}
       default -> {success=false;}
     }
     String msg="[엔잡퇴] "+event+(success?" 실행":" 실패/취소");p.sendMessage(msg);p.showTitle(net.kyori.adventure.title.Title.title(Component.text("엔잡퇴"),Component.text(msg)));
     p.playSound(p.getLocation(),Sound.BLOCK_NOTE_BLOCK_PLING,1f,1f);
+    return success;
   }
   private Location findSpawn(Player p) {
     Location origin=p.getLocation(); int min=getConfig().getInt("spawn-min-radius",3),max=getConfig().getInt("spawn-max-radius",7);
     for(int i=0;i<10;i++){double a=random.nextDouble()*Math.PI*2;double r=min+random.nextDouble()*Math.max(1,max-min);Location at=origin.clone().add(Math.cos(a)*r,0,Math.sin(a)*r);Location safe=safeAt(at.getWorld(),at.getBlockX(),at.getBlockY(),at.getBlockZ());if(safe!=null)return safe;}return null;
   }
   private Location findTeleport(Player p,boolean surface) {
-    World w=p.getWorld(); Location loc=p.getLocation();
-    for(int i=0;i<10;i++){
-      int x=loc.getBlockX(),z=loc.getBlockZ();
-      if(!surface){double angle=random.nextDouble()*Math.PI*2;double r=Math.sqrt(random.nextDouble())*getConfig().getInt("random-teleport-radius",300);x+=(int)Math.round(Math.cos(angle)*r);z+=(int)Math.round(Math.sin(angle)*r);}
-      // Scan down from current height for move, from max height for surface. Avoid cross-dimension teleports.
-      int top=surface?w.getMaxHeight()-3:Math.min(w.getMaxHeight()-3,loc.getBlockY()+16);
-      int bottom=surface?w.getMinHeight()+1:Math.max(w.getMinHeight()+1,loc.getBlockY()-32);
-      for(int y=top;y>=bottom;y--){Location safe=safeAt(w,x,y,z);if(safe!=null)return safe;}
-    }return null;
+    return SafeTeleport.destination(p,surface,random);
   }
   private Location safeAt(World w,int x,int y,int z){
     if(y<=w.getMinHeight()||y+2>=w.getMaxHeight())return null;

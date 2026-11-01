@@ -13,9 +13,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class BridgeEndpointTest {
   @TempDir Path temp;
   record Response(int status,String body){}
-  Response post(HttpServer server,String body,String token) throws Exception {
+  Response post(HttpServer server,String body,String token) throws Exception {return post(server,body,token,null,null);}
+  Response post(HttpServer server,String body,String token,String instance,String cheese) throws Exception {
     HttpURLConnection c=(HttpURLConnection)new URL("http://127.0.0.1:"+server.getAddress().getPort()+"/event").openConnection(Proxy.NO_PROXY);
     c.setConnectTimeout(2000);c.setReadTimeout(2000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("X-EJT-Token",token);
+    if(instance!=null)c.setRequestProperty("X-EJT-Instance",instance);
+    if(cheese!=null)c.setRequestProperty("X-EJT-Cheese",cheese);
     try {try(var out=c.getOutputStream()){out.write(body.getBytes(StandardCharsets.UTF_8));}
       int status=c.getResponseCode();try(var in=status>=400?c.getErrorStream():c.getInputStream()){return new Response(status,new String(in.readAllBytes(),StandardCharsets.UTF_8));}
     } finally {c.disconnect();}
@@ -63,6 +66,22 @@ class BridgeEndpointTest {
         finally{c.disconnect();}
         assertEquals(0,store.count("PENDING"));
         assertEquals(new Response(200,"queued"),post(server,"manual-test\tbread","private-token"));
+      } finally {server.stop(0);}
+    }
+  }
+
+  @Test void verifiedGameAmountRequiresCurrentInstanceAndMatchingEffect() throws Exception {
+    try(EventStore store=new EventStore(temp.resolve("amounts.db"))) {
+      HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+      server.createContext("/event",BridgeEndpoint.managed("token","instance",store::enqueue));server.start();
+      try {
+        assertEquals(400,post(server,"bad1\tmove","token",null,"1000").status());
+        assertEquals(400,post(server,"bad2\tmove","token","instance","5000").status());
+        assertEquals(400,post(server,"bad3\tmove","token","instance","1000\"<tag>").status());
+        assertEquals(200,post(server,"good\tmove","token","instance","1000").status());
+        assertEquals("duplicate",post(server,"good\tmove","token","instance","1000").body());
+        var e=store.begin();assertEquals(1000,e.cheese());store.complete(e.id());assertNull(store.begin());
+        assertEquals(200,post(server,"manual\tbread","token").status());assertEquals(0,store.begin().cheese());
       } finally {server.stop(0);}
     }
   }

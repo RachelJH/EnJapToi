@@ -10,11 +10,14 @@ final class BridgeEndpoint implements HttpHandler {
   @FunctionalInterface interface Receiver {
     EventStore.Receipt enqueue(String id,String effect) throws Exception;
   }
+  @FunctionalInterface interface DonationReceiver {EventStore.Receipt enqueue(String id,String effect,int cheese)throws Exception;}
   private final byte[] token;
-  private final Receiver receiver;
+  private final DonationReceiver receiver;
   private final String instance;
   BridgeEndpoint(String token,Receiver receiver){this(token,null,receiver);}
-  BridgeEndpoint(String token,String instance,Receiver receiver){this.token=token.getBytes(StandardCharsets.UTF_8);this.instance=instance;this.receiver=receiver;}
+  BridgeEndpoint(String token,String instance,Receiver receiver){this(token,instance,(id,effect,cheese)->receiver.enqueue(id,effect),true);}
+  private BridgeEndpoint(String token,String instance,DonationReceiver receiver,boolean marker){this.token=token.getBytes(StandardCharsets.UTF_8);this.instance=instance;this.receiver=receiver;}
+  static BridgeEndpoint managed(String token,String instance,DonationReceiver receiver){return new BridgeEndpoint(token,instance,receiver,true);}
   @Override public void handle(HttpExchange exchange) throws IOException {
     try(exchange) {
       if(!"/event".equals(exchange.getRequestURI().getPath())){respond(exchange,404,"not found");return;}
@@ -31,8 +34,14 @@ final class BridgeEndpoint implements HttpHandler {
       if(parts.length!=2 || !parts[0].matches("[A-Za-z0-9_-]{1,100}") || !parts[1].matches("buff|move|bread|pickaxe|mob|debuff|clear|chancekill|surface|kill")){
         respond(exchange,400,"invalid event");return;
       }
+      int cheese=0;
+      String amount=exchange.getRequestHeaders().getFirst("X-EJT-Cheese");
+      if(amount!=null){
+        if(sentInstance==null || !amount.matches("1000|2000|5000|30000") || Integer.parseInt(amount)!=DonationNotice.amount(parts[1])){respond(exchange,400,"invalid cheese");return;}
+        cheese=Integer.parseInt(amount);
+      }
       EventStore.Receipt result;
-      try { result=receiver.enqueue(parts[0],parts[1]); }
+      try { result=receiver.enqueue(parts[0],parts[1],cheese); }
       catch(Exception e) {
         if(e instanceof InterruptedException)Thread.currentThread().interrupt();
         respond(exchange,503,"unavailable");return;

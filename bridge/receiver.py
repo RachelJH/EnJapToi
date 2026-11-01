@@ -241,7 +241,8 @@ class PaperReceipts:
                 token = Path(self.token_file).read_text(encoding='utf-8').strip()
                 if not token:
                     raise ValueError()
-                result = self.send(effect, event_id, token, self.port, instance=self.instance)
+                # Intake already gated delivery on operator-verified mapping. Send the game tier, never raw KRW or donor PII.
+                result = self.send(effect, event_id, token, self.port, instance=self.instance, cheese=bridge.PRICE[effect])
                 if result in ('queued', 'duplicate'):
                     with self.lock: self.totals['done'] += 1
                     return event_id
