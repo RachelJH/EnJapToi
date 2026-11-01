@@ -82,7 +82,7 @@ $env:CHZZK_CLIENT_ID = Read-Host "개발자 센터의 Client ID"
 $env:CHZZK_CLIENT_SECRET = [System.Net.NetworkCredential]::new("", (Read-Host "Client Secret" -AsSecureString)).Password
 ```
 
-환경변수 대신 설정 파일을 사용하려면 Git에서 제외된 `bridge\.local\client.json`을 만들고 `clientId`, `clientSecret` 문자열 키를 넣을 수 있습니다. `--config bridge\.local\client.json`을 `login` 또는 `refresh` 뒤에 붙이세요. 이 JSON은 **평문**이므로 Windows 파일 보안에서 본인 계정만 접근하도록 제한하고 공유·백업에서 제외하세요. 환경변수가 있으면 파일보다 우선합니다. 일반 추적 파일에 비밀값을 넣지 마세요.
+환경변수 대신 설정 파일을 사용하려면 Git에서 제외된 `bridge\.local\client.json`을 만들고 `clientId`, `clientSecret` 문자열 키를 넣을 수 있습니다. `--config bridge\.local\client.json`을 `login` 또는 `refresh` 뒤에 붙이세요. 이 JSON은 **평문**이므로 Windows 파일 보안에서 본인 계정만 접근하도록 제한하고 공유·백업에서 제외하세요. 환경변수의 Client ID와 Secret이 둘 다 설정됐으면 파일보다 우선합니다. 한쪽만 있거나 비어 있으면 `CLIENT_CONFIG_PAIR`로 중단하며 파일 값과 섞지 않습니다. 파일만 사용할 때에는 두 환경변수를 모두 제거하세요. 일반 추적 파일에 비밀값을 넣지 마세요.
 
 ### 3. 방송인 계정으로 로그인
 
@@ -338,3 +338,5 @@ receiver:
 | `LOCAL_OPERATION` | 콜백 대기 준비나 기타 로컬 처리 실패입니다. |
 
 예를 들어 `TOKEN_HTTP_401`과 `TOKEN_RESPONSE_SCHEMA (HTTP 200)`, `LOCAL_TOKEN_SAVE`는 서로 다른 단계입니다. 지원 요청에는 진단 코드와 숫자 HTTP 상태만 공유하세요. 브라우저 주소·원문 응답·토큰 파일·설정의 비밀값을 붙이지 마세요. 실패한 인증 코드나 일회용 Refresh Token을 자동 재시도하지 않으며, 설정 확인 후 새 로그인으로 다시 인증합니다. state 검증, 토큰 보호 저장, 파일 잠금, TLS 검증과 로그 비공개 정책은 유지합니다.
+
+OAuth `TOKEN_HTTP_401` 요청 검토: [공식 문서와 요청 URL·POST·JSON·필드 대조 및 입력 출처 확인](docs/oauth-request-review.md). 요청 형식 자체는 확인한 명세와 일치합니다. 환경변수/파일의 ID·Secret 혼합은 차단했지만 실제 401 원인을 확정한 것은 아닙니다.

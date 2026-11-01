@@ -36,6 +36,23 @@ class OAuthTests(unittest.TestCase):
             self.assertEqual(oauth.credentials(p), ('file-id', 'file-secret'))
             with self.assertRaises(oauth.OAuthError): oauth.credentials()
 
+    def test_partial_environment_cannot_mix_credentials_with_file(self):
+        p=Path(self.tmp.name)/'client.json'
+        p.write_text(json.dumps({'clientId':'file-app','clientSecret':'file-secret'}))
+        for variables in ({'CHZZK_CLIENT_ID':'other-app'}, {'CHZZK_CLIENT_SECRET':'other-secret'},
+                          {'CHZZK_CLIENT_ID':'other-app','CHZZK_CLIENT_SECRET':''},
+                          {'CHZZK_CLIENT_ID':'','CHZZK_CLIENT_SECRET':'other-secret'}):
+            with self.subTest(keys=tuple(variables)),patch.dict(os.environ,variables,clear=True):
+                with self.assertRaises(oauth.OAuthError) as error:oauth.credentials(p)
+                self.assertIn('CLIENT_CONFIG_PAIR',str(error.exception))
+                for secret in ('file-app','file-secret','other-app','other-secret'):
+                    self.assertNotIn(secret,str(error.exception))
+        # Complete environment pair still has the documented precedence.
+        with patch.dict(os.environ,{'CHZZK_CLIENT_ID':'env-app','CHZZK_CLIENT_SECRET':'env-secret'},clear=True):
+            self.assertEqual(oauth.credentials(p),('env-app','env-secret'))
+        with patch.dict(os.environ,{},clear=True):
+            self.assertEqual(oauth.credentials(p),('file-app','file-secret'))
+
     def test_store_roundtrip_and_atomic_failure(self):
         self.store.save(self.tokens())
         self.assertEqual(self.store.load()['refreshToken'], self.payload['refreshToken'])
@@ -315,6 +332,49 @@ class OAuthTests(unittest.TestCase):
         with patch.object(self.store,'save',side_effect=AssertionError('must not save invalid API response')):
             errors,_=self.run_login(action,request=Mock(return_value=['mock-sensitive']))
         self.assertEqual(errors[0].diagnostic_code,'TOKEN_RESPONSE_SCHEMA')
+
+    def test_code_exchange_request_matches_official_json_contract(self):
+        response=Mock();response.status=200;response.read.return_value=json.dumps(self.payload).encode()
+        response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        api_opener=Mock();api_opener.open.return_value=response
+        real_build=urllib.request.build_opener
+        def route(*handlers):
+            return api_opener if any(isinstance(h,oauth.NoRedirect) for h in handlers) else real_build(*handlers)
+        code='mock+code/=?&한글'
+        expected_state=[]
+        def action(state):
+            expected_state.append(state)
+            query=urllib.parse.urlencode({'code':code,'state':state})
+            self.assertEqual(self.callback('/callback?'+query)[0],200)
+        with patch.object(oauth.urllib.request,'build_opener',side_effect=route):
+            errors,request=self.run_login(action,request=Mock(wraps=oauth.post_token))
+        self.assertEqual(errors,[]);request.assert_called_once();api_opener.open.assert_called_once()
+        req=api_opener.open.call_args.args[0]
+        self.assertEqual(req.full_url,'https://openapi.chzzk.naver.com/auth/v1/token')
+        self.assertEqual(req.get_method(),'POST')
+        self.assertEqual(req.get_header('Content-type'),'application/json')
+        self.assertEqual(urllib.parse.urlsplit(req.full_url).query,'')
+        self.assertIsNone(req.get_header('Authorization'))
+        self.assertEqual(json.loads(req.data.decode('utf-8')),{
+            'grantType':'authorization_code','clientId':'mock-client','clientSecret':'mock-secret',
+            'code':code,'state':expected_state[0]})
+        # No undocumented redirectUri/scope/form fields or double encoding.
+        self.assertEqual(api_opener.open.call_args.kwargs,{'timeout':20})
+
+    def test_refresh_request_matches_official_json_contract(self):
+        self.store.save(self.tokens())
+        response=Mock();response.status=200;response.read.return_value=json.dumps(self.payload).encode()
+        response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        opener=Mock();opener.open.return_value=response
+        with patch.object(oauth.urllib.request,'build_opener',return_value=opener):
+            oauth.refresh_tokens('mock-client','mock-secret',self.store,force=True,request=oauth.post_token)
+        opener.open.assert_called_once();req=opener.open.call_args.args[0]
+        self.assertEqual(req.full_url,'https://openapi.chzzk.naver.com/auth/v1/token')
+        self.assertEqual(req.get_method(),'POST')
+        self.assertEqual(req.get_header('Content-type'),'application/json')
+        self.assertIsNone(req.get_header('Authorization'))
+        self.assertEqual(json.loads(req.data),{'grantType':'refresh_token','clientId':'mock-client',
+            'clientSecret':'mock-secret','refreshToken':'mock-refresh-sensitive'})
 
     @unittest.skipUnless(os.name == 'nt', 'Windows DPAPI requires a Windows user session')
     def test_windows_dpapi(self):
