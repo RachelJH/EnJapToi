@@ -79,8 +79,14 @@ def credentials(config=None):
                 raise ValueError()
         except (OSError, ValueError):
             raise OAuthError('클라이언트 설정 파일을 읽을 수 없습니다.') from None
-    client_id = os.environ.get('CHZZK_CLIENT_ID') or values.get('clientId')
-    secret = os.environ.get('CHZZK_CLIENT_SECRET') or values.get('clientSecret')
+    env_id = os.environ.get('CHZZK_CLIENT_ID')
+    env_secret = os.environ.get('CHZZK_CLIENT_SECRET')
+    if env_id is not None or env_secret is not None:
+        if not all(isinstance(v, str) and v.strip() for v in (env_id, env_secret)):
+            raise OAuthError('[CLIENT_CONFIG_PAIR] 환경변수의 Client ID와 Secret을 둘 다 설정하거나 둘 다 제거하고 설정 파일을 사용하세요. 서로 다른 출처를 혼합하지 않습니다.')
+        client_id, secret = env_id, env_secret
+    else:
+        client_id, secret = values.get('clientId'), values.get('clientSecret')
     if not all(isinstance(v, str) and v.strip() for v in (client_id, secret)):
         raise OAuthError('Client ID와 Client Secret 설정이 필요합니다.')
     return client_id, secret
