@@ -32,7 +32,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
   private HttpServer server;
   private BukkitTask ticker;
   private String token;
-  private long lastExecution = 0;
+  private final EventRunner eventRunner=new EventRunner();
 
   @Override public void onEnable() {
     saveDefaultConfig();
@@ -85,20 +85,10 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     try {
       if (store.paused() || store.count("PENDING")==0) return;
       Player player=Bukkit.getPlayerExact(getConfig().getString("broadcaster", "Yirue"));
-      if(player==null)return;
-      long now=System.currentTimeMillis();
-      if(now-lastExecution<getConfig().getLong("interval-ticks",60)*50)return;
-      EventStore.Event event=store.begin();
-      if(event==null)return;
-      lastExecution=now;
-      boolean applied;
-      try { applied=executeEvent(player,event.effect()); }
-      catch(RuntimeException e) {
-        store.uncertain(event.id());
-        getLogger().severe("Event execution interrupted; marked UNCERTAIN and paused. Review before resuming.");
-        return;
-      }
-      DonationNotice.complete(store,event,applied,notice->Bukkit.broadcast(notice));
+      eventRunner.run(store,player,System.currentTimeMillis(),getConfig().getLong("interval-ticks",60)*50,
+          event->executeEvent(player,event.effect()),notice->Bukkit.broadcast(notice));
+    } catch(RuntimeException e) {
+      getLogger().severe("Event processing interrupted; review event state before continuing.");
     } catch(SQLException e) {
       storageFailed=true;
       getLogger().severe("Event storage failed; execution stopped. Restart and review UNCERTAIN events.");
@@ -139,16 +129,17 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     return true;
   }
   private boolean executeEvent(Player p,String event) {
+    if(!EffectActions.ready(p))return false;
     boolean success=true;
     switch(event) {
       case "buff" -> {PotionEffectType[] t={PotionEffectType.SPEED,PotionEffectType.STRENGTH,PotionEffectType.REGENERATION,PotionEffectType.RESISTANCE,PotionEffectType.JUMP_BOOST,PotionEffectType.HASTE};success=p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],1200,0,true,true));}
       case "debuff" -> {PotionEffectType[] t={PotionEffectType.SLOWNESS,PotionEffectType.WEAKNESS,PotionEffectType.MINING_FATIGUE,PotionEffectType.BLINDNESS,PotionEffectType.HUNGER,PotionEffectType.NAUSEA};success=p.addPotionEffect(new PotionEffect(t[random.nextInt(t.length)],600,0,true,true));}
-      case "bread" -> {Map<Integer,ItemStack> left=p.getInventory().addItem(new ItemStack(Material.BREAD,5));left.values().forEach(it->p.getWorld().dropItemNaturally(p.getLocation(),it));}
-      case "pickaxe" -> {ItemStack item=new ItemStack(Material.DIAMOND_PICKAXE);Damageable meta=(Damageable)item.getItemMeta();meta.setDamage(item.getType().getMaxDurability()-1);item.setItemMeta(meta);Map<Integer,ItemStack> left=p.getInventory().addItem(item);left.values().forEach(it->p.getWorld().dropItemNaturally(p.getLocation(),it));}
-      case "clear" -> {p.getInventory().clear();p.getInventory().setArmorContents(new ItemStack[4]);p.getInventory().setItemInOffHand(null);}
-      case "chancekill" -> {success=random.nextInt(100)<15;if(success)p.setHealth(0.0);}
-      case "kill" -> p.setHealth(0.0);
-      case "mob" -> {EntityType[] types={EntityType.ZOMBIE,EntityType.SKELETON,EntityType.SPIDER,EntityType.CREEPER,EntityType.HUSK,EntityType.STRAY}; Location at=findSpawn(p);if(at==null)success=false;else p.getWorld().spawnEntity(at,types[random.nextInt(types.length)]);}
+      case "bread" -> success=EffectActions.give(p,new ItemStack(Material.BREAD,5));
+      case "pickaxe" -> {ItemStack item=new ItemStack(Material.DIAMOND_PICKAXE);Damageable meta=(Damageable)item.getItemMeta();meta.setDamage(item.getType().getMaxDurability()-1);item.setItemMeta(meta);success=EffectActions.give(p,item);}
+      case "clear" -> success=EffectActions.clearOne(p,random);
+      case "chancekill" -> success=EffectActions.chanceKill(p,random);
+      case "kill" -> success=EffectActions.kill(p);
+      case "mob" -> {EntityType[] types={EntityType.ZOMBIE,EntityType.SKELETON,EntityType.SPIDER,EntityType.CREEPER,EntityType.HUSK,EntityType.STRAY}; Location at=findSpawn(p);success=at!=null && EffectActions.spawn(p,at,types[random.nextInt(types.length)]);}
       case "move" -> {Location at=findTeleport(p,false);if(at==null)success=false;else success=p.teleport(at);}
       case "surface" -> {Location at=findTeleport(p,true);if(at==null)success=false;else success=p.teleport(at);}
       default -> {success=false;}

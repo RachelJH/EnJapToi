@@ -15,6 +15,8 @@ def select_event(amount, message):
         event = matches[0]
         return event if PRICE[event] == amount else None
     if amount == 1000: return secrets.choice(["buff", "move", "bread", "pickaxe"])
+    if amount == 2000: return secrets.choice(["mob", "debuff"])
+    if amount == 5000: return secrets.choice(["clear", "chancekill", "surface"])
     return None
 
 def safe_donor(value):

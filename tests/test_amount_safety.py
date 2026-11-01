@@ -46,7 +46,7 @@ class AmountSafetyTests(unittest.TestCase):
 
     def test_existing_command_priority_price_and_roulette_are_reused(self):
         p=self.payloads[0]
-        examples=[('1000','!밥 !이동','bread'),('1000','!몹',None),('2000','',None),
+        examples=[('1000','!밥 !이동','bread'),('1000','!몹',None),
                   ('5000','!밥',None),('30000','!밥','kill')]
         for amount,text,expected in examples:
             self.assertEqual(check.check([dict(p,payAmount=amount,donationText=text)],self.mapping)['results'][0]['effect'],expected)
