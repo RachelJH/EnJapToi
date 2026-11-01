@@ -1,6 +1,7 @@
 """No external connections or real credentials. Callback tests bind loopback only."""
 import contextlib
 import io
+import http.client
 import json
 import os
 from pathlib import Path
@@ -197,6 +198,123 @@ class OAuthTests(unittest.TestCase):
         with oauth.CallbackServer(('127.0.0.1', 18766), oauth.CallbackHandler):
             with self.assertRaises(oauth.OAuthError):
                 oauth.login('mock-client', 'mock-secret', self.store, open_browser=Mock())
+
+    def test_token_api_status_and_format_diagnostics_are_allowlisted(self):
+        response = Mock()
+        response.status = 200
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock();opener.open.return_value = response
+        with patch.object(oauth.urllib.request, 'build_opener', return_value=opener):
+            for raw, category in ((b'mock-sensitive-not-json','json'),
+                                  (json.dumps(dict(self.payload,tokenType='mock-sensitive')).encode(),'schema'),
+                                  (b'{"code":403,"content":{"secret":"mock-sensitive"}}','schema'),
+                                  (b'x'*65537,'json')):
+                response.read.return_value=raw
+                with self.subTest(category=category), self.assertRaises(oauth.TokenAPIError) as error:
+                    oauth.post_token({'clientSecret':'mock-sensitive'})
+                self.assertEqual(error.exception.category,category)
+                self.assertEqual(error.exception.http_status,200)
+                self.assertIn('HTTP 200',str(error.exception))
+                self.assertNotIn('mock-sensitive',str(error.exception))
+            for status in (400,401,403,429,500,302):
+                body=io.BytesIO(b'mock-sensitive-response-body')
+                opener.open.side_effect=urllib.error.HTTPError('https://mock-sensitive',status,'mock-sensitive-reason',{},body)
+                with patch.object(body,'read',side_effect=AssertionError('must not read error body')):
+                    with self.assertRaises(oauth.TokenAPIError) as error:oauth.post_token({})
+                self.assertEqual(error.exception.diagnostic_code,'TOKEN_HTTP_'+str(status))
+                self.assertIn('HTTP '+str(status),str(error.exception))
+                self.assertNotIn('mock-sensitive',str(error.exception))
+
+    def test_network_failures_never_expose_reason_or_partial_body(self):
+        opener=Mock()
+        for exception in (urllib.error.URLError('mock-sensitive-url'),TimeoutError('mock-sensitive-timeout'),
+                          http.client.IncompleteRead(b'mock-sensitive-partial',42),OSError('mock-sensitive-network')):
+            opener.open.side_effect=exception
+            with patch.object(oauth.urllib.request,'build_opener',return_value=opener):
+                with self.assertRaises(oauth.TokenAPIError) as error:oauth.post_token({})
+            self.assertEqual(error.exception.category,'network')
+            self.assertNotIn('mock-sensitive',str(error.exception))
+
+    def test_callback_retains_safe_api_diagnostic_in_browser_and_terminal(self):
+        failures=[oauth.TokenAPIError('http',status) for status in (400,401,403,429,500)]
+        failures += [oauth.TokenAPIError('json',200),oauth.TokenAPIError('schema',200),oauth.TokenAPIError('network')]
+        for failure in failures:
+            failure.args=('mock-sensitive-original-exception',)
+            request=Mock(side_effect=failure)
+            def action(state):
+                status,body,headers=self.callback('/callback?code=mock-sensitive-code&state='+state)
+                self.assertEqual(status,502)
+                self.assertIn(failure.diagnostic_code.encode(),body)
+                self.assertNotIn(b'mock-sensitive',body)
+                self.assertEqual(headers['Cache-Control'],'no-store')
+                self.assertEqual(headers['Referrer-Policy'],'no-referrer')
+            with self.subTest(code=failure.diagnostic_code):
+                errors,request=self.run_login(action,request=request)
+                self.assertIsInstance(errors[0],oauth.TokenAPIError)
+                self.assertEqual(errors[0].diagnostic_code,failure.diagnostic_code)
+                self.assertNotIn('mock-sensitive',str(errors[0]))
+                request.assert_called_once()
+                self.assertFalse(self.store.path.exists())
+                # The same sanitized error is exactly what main prints; no exception repr.
+                output=io.StringIO()
+                with patch.object(oauth,'TokenStore',return_value=self.store), \
+                     patch.object(oauth,'credentials',return_value=('mock-client','mock-secret')), \
+                     patch.object(oauth,'login',side_effect=errors[0]),contextlib.redirect_stdout(output):
+                    self.assertEqual(oauth.main(['login']),1)
+                self.assertIn(failure.diagnostic_code,output.getvalue())
+                for secret in ('mock-sensitive','mock-client','mock-secret','mock-access-sensitive','mock-refresh-sensitive'):
+                    self.assertNotIn(secret,output.getvalue())
+
+    def test_unexpected_api_exception_cannot_escape_as_http_server_traceback(self):
+        def action(state):
+            status,body,_=self.callback('/callback?code=mock-sensitive-code&state='+state)
+            self.assertEqual(status,502);self.assertIn(b'TOKEN_API_UNKNOWN',body)
+            self.assertNotIn(b'mock-sensitive',body)
+        errors,_=self.run_login(action,request=Mock(side_effect=RuntimeError('mock-sensitive-body')))
+        self.assertEqual(errors[0].diagnostic_code,'TOKEN_API_UNKNOWN')
+        self.assertNotIn('mock-sensitive',str(errors[0]))
+
+    def test_callback_local_storage_error_is_distinct_from_api_error(self):
+        for failure in (PermissionError('mock-sensitive-path'),OSError('mock-sensitive-disk'),
+                        oauth.OAuthError('mock-sensitive-dpapi'),RuntimeError('mock-sensitive-unexpected-save')):
+            def action(state):
+                status,body,_=self.callback('/callback?code=mock-sensitive-code&state='+state)
+                self.assertEqual(status,500)
+                self.assertIn(b'LOCAL_TOKEN_SAVE',body)
+                self.assertNotIn(b'mock-sensitive',body)
+            with self.subTest(kind=type(failure).__name__),patch.object(self.store,'save',side_effect=failure):
+                errors,request=self.run_login(action)
+            self.assertIsInstance(errors[0],oauth.TokenStorageError)
+            self.assertIn('LOCAL_TOKEN_SAVE',str(errors[0]))
+            self.assertNotIn('mock-sensitive',str(errors[0]))
+            request.assert_called_once()
+
+    def test_refresh_save_and_status_read_errors_are_classified(self):
+        self.store.save(self.tokens())
+        before=self.store.path.read_bytes()
+        request=Mock(return_value=dict(self.tokens(),refreshToken='new-refresh'))
+        with patch.object(oauth.os,'replace',side_effect=OSError('mock-sensitive-path')):
+            with self.assertRaises(oauth.TokenStorageError) as error:
+                oauth.refresh_tokens('mock-client','mock-secret',self.store,force=True,request=request)
+        self.assertEqual(error.exception.diagnostic_code,'LOCAL_TOKEN_SAVE')
+        self.assertEqual(self.store.path.read_bytes(),before)
+        request.assert_called_once()
+        self.assertNotIn('mock-sensitive',str(error.exception))
+        self.store.path.write_bytes(b'mock-sensitive-corrupt-file')
+        output=io.StringIO()
+        with patch.object(oauth,'TokenStore',return_value=self.store),contextlib.redirect_stdout(output):
+            self.assertEqual(oauth.main(['status']),1)
+        self.assertIn('LOCAL_TOKEN_READ',output.getvalue())
+        self.assertNotIn('mock-sensitive',output.getvalue())
+
+    def test_bad_api_return_is_not_misdiagnosed_as_storage_failure(self):
+        def action(state):
+            status,body,_=self.callback('/callback?code=mock-code&state='+state)
+            self.assertEqual(status,502);self.assertIn(b'TOKEN_RESPONSE_SCHEMA',body)
+        with patch.object(self.store,'save',side_effect=AssertionError('must not save invalid API response')):
+            errors,_=self.run_login(action,request=Mock(return_value=['mock-sensitive']))
+        self.assertEqual(errors[0].diagnostic_code,'TOKEN_RESPONSE_SCHEMA')
 
     @unittest.skipUnless(os.name == 'nt', 'Windows DPAPI requires a Windows user session')
     def test_windows_dpapi(self):
