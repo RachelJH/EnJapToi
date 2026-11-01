@@ -187,6 +187,8 @@ class Intake:
             return False
         if not self.allow_game_events:
             self.journal.add(None)
+            # Only the validated ASCII amount; never interpolate any other field.
+            print(f'payAmount={amount} KRW', flush=True)
             return False
         target = self.mapping.get(amount)
         effect = bridge.select_event(target, text) if target is not None else None
