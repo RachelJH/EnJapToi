@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import ctypes
 import hmac
+import http.client
 import json
 import math
 import os
@@ -27,6 +28,46 @@ LOCAL = Path(__file__).resolve().parent / '.local'
 
 class OAuthError(Exception):
     """Only fixed, public-safe messages may cross the CLI boundary."""
+
+
+class TokenAPIError(OAuthError):
+    """Only an allowlisted category and numeric HTTP status may be displayed."""
+    MESSAGES = {
+        'http': ('TOKEN_HTTP', '토큰 API HTTP 요청 실패'),
+        'json': ('TOKEN_RESPONSE_JSON', '토큰 API 응답 JSON 해석·크기 검증 실패'),
+        'schema': ('TOKEN_RESPONSE_SCHEMA', '토큰 API 응답 필드·타입·값이 명세와 다릅니다'),
+        'network': ('TOKEN_NETWORK', '토큰 API 네트워크 통신 실패'),
+        'unknown': ('TOKEN_API_UNKNOWN', '토큰 발급 처리 실패 (안전하게 분류할 수 없는 오류)'),
+    }
+
+    def __init__(self, category, http_status=None):
+        self.category = category if isinstance(category, str) and category in self.MESSAGES else 'unknown'
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        code, message = self.MESSAGES[self.category]
+        self.diagnostic_code = code + (f'_{self.http_status}' if self.category == 'http' and self.http_status is not None else '')
+        status = f' (HTTP {self.http_status})' if self.http_status is not None else ''
+        super().__init__(f'[{self.diagnostic_code}] {message}{status}. 자동 재시도하지 않습니다. 설정 확인 후 다시 로그인하세요.')
+
+
+class TokenStorageError(OAuthError):
+    def __init__(self, operation):
+        self.diagnostic_code = 'LOCAL_TOKEN_READ' if operation == 'read' else 'LOCAL_TOKEN_SAVE'
+        action = '읽기·복호화' if operation == 'read' else '암호화·저장'
+        super().__init__(f'[{self.diagnostic_code}] 로컬 토큰 {action} 실패. 파일 권한·저장 공간·Windows 사용자를 확인하고 다시 로그인하세요.')
+
+
+def save_tokens(store, tokens):
+    try:
+        store.save(tokens)
+    except Exception:
+        raise TokenStorageError('save') from None
+
+
+def load_tokens(store):
+    try:
+        return store.load()
+    except Exception:
+        raise TokenStorageError('read') from None
 
 
 def credentials(config=None):
@@ -164,8 +205,10 @@ def post_token(body):
     req = urllib.request.Request(TOKEN_URL, data=json.dumps(body).encode(),
                                  headers={'Content-Type': 'application/json'}, method='POST')
     # Default proxy/CA configuration is retained; credentials are never redirected.
+    status = None
     try:
         with urllib.request.build_opener(NoRedirect()).open(req, timeout=20) as response:
+            status = response.status
             raw = response.read(65537)
             if len(raw) > 65536:
                 raise ValueError()
@@ -173,17 +216,17 @@ def post_token(body):
     except urllib.error.HTTPError as e:
         code = e.code
         e.close()
-        if code == 401:
-            raise OAuthError('인증이 거부되었습니다. 설정 확인 후 다시 로그인하세요.') from None
-        raise OAuthError(f'토큰 API 요청 실패 (HTTP {code}). 자동 재시도하지 않습니다.') from None
-    except (urllib.error.URLError, TimeoutError, OSError):
-        raise OAuthError('토큰 API 통신 실패. 토큰 사용 여부가 불명확하므로 자동 재시도하지 않습니다.') from None
+        raise TokenAPIError('http', code) from None
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
+        raise TokenAPIError('network', status) from None
     except ValueError:
-        raise OAuthError('토큰 API 응답 형식이 올바르지 않습니다.') from None
-    return normalize_tokens(data)
+        raise TokenAPIError('json', status) from None
+    except Exception:
+        raise TokenAPIError('unknown', status) from None
+    return normalize_tokens(data, http_status=status)
 
 
-def normalize_tokens(data):
+def normalize_tokens(data, http_status=None):
     try:
         # Token documentation lists direct fields; accept the common API envelope too.
         if isinstance(data, dict) and 'content' in data:
@@ -200,13 +243,13 @@ def normalize_tokens(data):
         return {'accessToken': data['accessToken'], 'refreshToken': data['refreshToken'],
                 'tokenType': 'Bearer', 'expiresAt': time.time() + ttl}
     except (ValueError, TypeError, KeyError, OverflowError):
-        raise OAuthError('토큰 API 응답 형식이 올바르지 않습니다.') from None
+        raise TokenAPIError('schema', http_status) from None
 
 
 def refresh_tokens(client_id, secret, store, force=False, request=post_token):
     # Refresh tokens are single-use. Hold lock across load, request and replacement.
     with store.lock():
-        old = store.load()
+        old = load_tokens(store)
         if old.get('clientId') != client_id:
             raise OAuthError('저장된 인증과 Client ID가 다릅니다. 다시 로그인하세요.')
         if not isinstance(old.get('refreshToken'), str) or not old['refreshToken']:
@@ -219,7 +262,7 @@ def refresh_tokens(client_id, secret, store, force=False, request=post_token):
         new = request({'grantType': 'refresh_token', 'clientId': client_id,
                        'clientSecret': secret, 'refreshToken': old['refreshToken']})
         new['clientId'] = client_id
-        store.save(new)
+        save_tokens(store, new)
         return new
 
 
@@ -295,11 +338,33 @@ class CallbackHandler(BaseHTTPRequestHandler):
             tokens = s.request_token({'grantType': 'authorization_code',
                                      'clientId': s.client_id, 'clientSecret': s.secret,
                                      'code': q['code'][0], 'state': s.state})
+            if not isinstance(tokens, dict):
+                raise TokenAPIError('schema')
+        except TokenAPIError as error:
+            # Reconstruct from allowlisted metadata; never propagate exception text.
+            s.failure = TokenAPIError(error.category, error.http_status)
+        except urllib.error.HTTPError as error:
+            code = error.code
+            error.close()
+            s.failure = TokenAPIError('http', code)
+        except (OSError, http.client.HTTPException):
+            s.failure = TokenAPIError('network')
+        except (ValueError, TypeError):
+            s.failure = TokenAPIError('schema')
+        except OAuthError:
+            s.failure = TokenAPIError('unknown')
+        except Exception:
+            # BaseHTTPRequestHandler must not print a raw unexpected exception.
+            s.failure = TokenAPIError('unknown')
+        if s.failure:
+            self.reply(502, f'Authentication failed [{s.failure.diagnostic_code}]. Return to the terminal.')
+            return
+        try:
             tokens['clientId'] = s.client_id
-            s.store.save(tokens)
-        except (OAuthError, OSError):
-            s.failure = OAuthError('토큰 발급 또는 안전한 저장에 실패했습니다. 다시 로그인하세요.')
-            self.reply(502, 'Authentication failed. Close this tab and retry login.')
+            save_tokens(s.store, tokens)
+        except (TokenStorageError, OSError, ValueError, TypeError):
+            s.failure = TokenStorageError('save')
+            self.reply(500, 'Authentication failed [LOCAL_TOKEN_SAVE]. Return to the terminal.')
             return
         s.success = True
         self.reply(200, 'Authentication saved. Close this tab and return to the terminal.')
@@ -347,7 +412,7 @@ def main(argv=None):
     try:
         if args.command == 'status':
             with store.lock():
-                data = store.load()
+                data = load_tokens(store)
             expiry = data.get('expiresAt', 0)
             if not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
                 raise OAuthError('저장된 만료 정보가 올바르지 않습니다.')
@@ -367,7 +432,7 @@ def main(argv=None):
         print(str(e))
         return 1
     except (OSError, ValueError, RuntimeError):
-        print('로컬 인증 처리에 실패했습니다. 파일 권한·저장 공간·브라우저 설정을 확인하세요.')
+        print('[LOCAL_OPERATION] 로컬 인증 처리에 실패했습니다. 파일 권한·저장 공간·브라우저 설정을 확인하세요.')
         return 1
     except KeyboardInterrupt:
         print('인증 작업을 취소했습니다.')
