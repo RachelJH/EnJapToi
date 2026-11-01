@@ -124,7 +124,8 @@ class Journal:
             self.db.execute('ALTER TABLE events ADD COLUMN mapping_hash TEXT')
         self.db.commit()
 
-    def add(self, effect, mapping_hash=None):
+    def add(self, effect, mapping_hash=None, donor=None):
+        # Legacy simulation outbox deliberately discards display names.
         event_id = secrets.token_urlsafe(24)
         with self.lock, self.db:
             self.db.execute('INSERT INTO events(id,effect,status,mapping_hash) VALUES(?,?,?,?)',
@@ -193,7 +194,13 @@ class Intake:
         target = self.mapping.get(amount)
         effect = bridge.select_event(target, text) if target is not None else None
         # Choose roulette once. Managed mode sends directly; Paper commits before ACK.
-        receipt = self.journal.add(effect, mapping_digest(self.mapping) if effect else None)
+        # Missing identity metadata fails closed; no lookup of anonymous donors.
+        donor_id = data.get('donatorChannelId')
+        donor = None
+        if (isinstance(donor_id, str) and 0 < len(donor_id.strip()) <= 128
+                and donor_id.strip().casefold() not in ('anonymous', '익명')):
+            donor = bridge.safe_donor(data.get('donatorNickname'))
+        receipt = self.journal.add(effect, mapping_digest(self.mapping) if effect else None, donor=donor if effect else None)
         return effect is not None and receipt is not None
 
 
@@ -227,13 +234,17 @@ class PaperReceipts:
         self.lock = threading.Lock()
         self.totals = {'done':0, 'ignored':0, 'dropped':0}
 
-    def add(self, effect, mapping_hash=None):
+    def add(self, effect, mapping_hash=None, donor=None):
         if not self.lifetime.alive():
             return None
         if effect is None:
             with self.lock: self.totals['ignored'] += 1
             return None
         event_id = secrets.token_urlsafe(24)
+        donor = bridge.safe_donor(donor)
+        metadata = {'instance':self.instance, 'cheese':bridge.PRICE[effect]}
+        if donor is not None:
+            metadata['donor'] = donor
         for _ in range(2):
             if not self.lifetime.alive():
                 return None
@@ -241,8 +252,8 @@ class PaperReceipts:
                 token = Path(self.token_file).read_text(encoding='utf-8').strip()
                 if not token:
                     raise ValueError()
-                # Intake already gated delivery on operator-verified mapping. Send the game tier, never raw KRW or donor PII.
-                result = self.send(effect, event_id, token, self.port, instance=self.instance, cheese=bridge.PRICE[effect])
+                # Validated display name only; no donor ID/message or raw KRW. Reuse identical metadata on retry.
+                result = self.send(effect, event_id, token, self.port, **metadata)
                 if result in ('queued', 'duplicate'):
                     with self.lock: self.totals['done'] += 1
                     return event_id

@@ -10,12 +10,12 @@ final class BridgeEndpoint implements HttpHandler {
   @FunctionalInterface interface Receiver {
     EventStore.Receipt enqueue(String id,String effect) throws Exception;
   }
-  @FunctionalInterface interface DonationReceiver {EventStore.Receipt enqueue(String id,String effect,int cheese)throws Exception;}
+  @FunctionalInterface interface DonationReceiver {EventStore.Receipt enqueue(String id,String effect,int cheese,String donor)throws Exception;}
   private final byte[] token;
   private final DonationReceiver receiver;
   private final String instance;
   BridgeEndpoint(String token,Receiver receiver){this(token,null,receiver);}
-  BridgeEndpoint(String token,String instance,Receiver receiver){this(token,instance,(id,effect,cheese)->receiver.enqueue(id,effect),true);}
+  BridgeEndpoint(String token,String instance,Receiver receiver){this(token,instance,(id,effect,cheese,donor)->receiver.enqueue(id,effect),true);}
   private BridgeEndpoint(String token,String instance,DonationReceiver receiver,boolean marker){this.token=token.getBytes(StandardCharsets.UTF_8);this.instance=instance;this.receiver=receiver;}
   static BridgeEndpoint managed(String token,String instance,DonationReceiver receiver){return new BridgeEndpoint(token,instance,receiver,true);}
   @Override public void handle(HttpExchange exchange) throws IOException {
@@ -40,8 +40,18 @@ final class BridgeEndpoint implements HttpHandler {
         if(sentInstance==null || !amount.matches("1000|2000|5000|30000") || Integer.parseInt(amount)!=DonationNotice.amount(parts[1])){respond(exchange,400,"invalid cheese");return;}
         cheese=Integer.parseInt(amount);
       }
+      String donor=null;
+      String encodedDonor=exchange.getRequestHeaders().getFirst("X-EJT-Donor");
+      if(encodedDonor!=null && cheese!=0 && sentInstance!=null && encodedDonor.matches("[A-Za-z0-9_-]{1,172}")){
+        try {
+          byte[] decoded=java.util.Base64.getUrlDecoder().decode(encodedDonor);
+          String candidate=StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+              .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(decoded)).toString();
+          donor=DonationNotice.safeDonor(candidate);
+        }catch(IllegalArgumentException | java.nio.charset.CharacterCodingException ignored){ /* Anonymous; never echo the input. */ }
+      }
       EventStore.Receipt result;
-      try { result=receiver.enqueue(parts[0],parts[1],cheese); }
+      try { result=receiver.enqueue(parts[0],parts[1],cheese,donor); }
       catch(Exception e) {
         if(e instanceof InterruptedException)Thread.currentThread().interrupt();
         respond(exchange,503,"unavailable");return;

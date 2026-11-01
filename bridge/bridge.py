@@ -1,7 +1,7 @@
 """EnJapToi local test bridge. Does NOT connect to CHZZK yet.
 Python 3.10+ standard library only. This script simulates incoming donations.
 """
-import argparse, json, secrets, pathlib, urllib.request, urllib.error
+import argparse, base64, json, secrets, pathlib, unicodedata, urllib.request, urllib.error
 
 ROOT = pathlib.Path(__file__).resolve().parent
 ALIASES = {"!버프":"buff", "!이동":"move", "!밥":"bread", "!다곡":"pickaxe", "!몹":"mob", "!디버프":"debuff", "!삭제":"clear", "!랜덤즉사":"chancekill", "!지상":"surface", "!즉사":"kill"}
@@ -17,16 +17,37 @@ def select_event(amount, message):
     if amount == 1000: return secrets.choice(["buff", "move", "bread", "pickaxe"])
     return None
 
+def safe_donor(value):
+    """Display-only allowlist. Invalid/ambiguous input becomes anonymous, never rewritten into another name."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip(' ')
+    if not 1 <= len(value) <= 32 or value.casefold() in ('익명', '익명의 후원자', 'anonymous'):
+        return None
+    categories = [unicodedata.category(ch) for ch in value]
+    if not (categories[0].startswith('L') or categories[0] == 'Nd'):
+        return None
+    if any(not (cat.startswith('L') or cat == 'Nd' or cat.startswith('M') or ch in ' _-.')
+           for ch, cat in zip(value, categories)):
+        return None
+    if len(value.encode('utf-8')) > 128:
+        return None
+    return value
+
+
 class _NoLocalRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
-def deliver(event, event_id, token, port, instance=None, cheese=None):
+def deliver(event, event_id, token, port, instance=None, cheese=None, donor=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/event", data=f"{event_id}\t{event}".encode(),headers={"X-EJT-Token":token},method="POST")
     if instance is not None:
         req.add_header("X-EJT-Instance",instance)
     if cheese is not None:
         req.add_header("X-EJT-Cheese",str(cheese))
+    donor = safe_donor(donor)
+    if donor is not None and instance is not None and cheese == PRICE.get(event):
+        req.add_header("X-EJT-Donor",base64.urlsafe_b64encode(donor.encode('utf-8')).decode('ascii').rstrip('='))
     # This credential is for loopback Paper only, never a proxy or redirect target.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoLocalRedirect())
     with opener.open(req,timeout=10) as resp:

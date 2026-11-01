@@ -48,9 +48,9 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       }
       token = Files.readString(tokenFile.toPath(), StandardCharsets.UTF_8).trim();
       server = HttpServer.create(new InetSocketAddress(getConfig().getString("listen-host", "127.0.0.1"), getConfig().getInt("listen-port",18765)), 0);
-      server.createContext("/event", BridgeEndpoint.managed(token,serverInstance,(id,effect,cheese) ->
+      server.createContext("/event", BridgeEndpoint.managed(token,serverInstance,(id,effect,cheese,donor) ->
         Bukkit.getScheduler().callSyncMethod(this, () -> {
-          try { return store.enqueue(id,effect,cheese); }
+          try { return store.enqueue(id,effect,cheese,donor); }
           catch(SQLException e) { storageFailed=true;throw e; }
         }).get(5,TimeUnit.SECONDS)));
       server.start();

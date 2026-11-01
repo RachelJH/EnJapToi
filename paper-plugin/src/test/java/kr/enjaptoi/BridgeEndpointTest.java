@@ -14,11 +14,13 @@ class BridgeEndpointTest {
   @TempDir Path temp;
   record Response(int status,String body){}
   Response post(HttpServer server,String body,String token) throws Exception {return post(server,body,token,null,null);}
-  Response post(HttpServer server,String body,String token,String instance,String cheese) throws Exception {
+  Response post(HttpServer server,String body,String token,String instance,String cheese) throws Exception {return post(server,body,token,instance,cheese,null);}
+  Response post(HttpServer server,String body,String token,String instance,String cheese,String donor) throws Exception {
     HttpURLConnection c=(HttpURLConnection)new URL("http://127.0.0.1:"+server.getAddress().getPort()+"/event").openConnection(Proxy.NO_PROXY);
     c.setConnectTimeout(2000);c.setReadTimeout(2000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("X-EJT-Token",token);
     if(instance!=null)c.setRequestProperty("X-EJT-Instance",instance);
     if(cheese!=null)c.setRequestProperty("X-EJT-Cheese",cheese);
+    if(donor!=null)c.setRequestProperty("X-EJT-Donor",donor);
     try {try(var out=c.getOutputStream()){out.write(body.getBytes(StandardCharsets.UTF_8));}
       int status=c.getResponseCode();try(var in=status>=400?c.getErrorStream():c.getInputStream()){return new Response(status,new String(in.readAllBytes(),StandardCharsets.UTF_8));}
     } finally {c.disconnect();}
@@ -83,6 +85,27 @@ class BridgeEndpointTest {
         var e=store.begin();assertEquals(1000,e.cheese());store.complete(e.id());assertNull(store.begin());
         assertEquals(200,post(server,"manual\tbread","token").status());assertEquals(0,store.begin().cheese());
       } finally {server.stop(0);}
+    }
+  }
+
+  String encoded(String name){return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(name.getBytes(StandardCharsets.UTF_8));}
+  @Test void nicknameTravelsWithDurableReceiptAndUnsafeHeadersBecomeAnonymous() throws Exception {
+    try(EventStore store=new EventStore(temp.resolve("donor.db"))) {
+      HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+      server.createContext("/event",BridgeEndpoint.managed("token","instance",store::enqueue));server.start();
+      try {
+        assertEquals(new Response(200,"queued"),post(server,"good\tmove","token","instance","1000",encoded("홍길동")));
+        assertEquals(new Response(200,"duplicate"),post(server,"good\tmove","token","instance","1000",encoded("다른이름")));
+        var event=store.begin();assertEquals("홍길동",event.donor());store.complete(event.id());
+        int i=0;
+        for(String unsafe:java.util.List.of("%%%", "_w", "A".repeat(173), encoded("§a관리자"),encoded("홍\r\nInjected"),encoded("<click:run_command:/op>"))){
+          assertEquals(200,post(server,"bad"+(i++)+"\tmove","token","instance","1000",unsafe).status());
+          event=store.begin();assertNull(event.donor());store.complete(event.id());
+        }
+        assertEquals(200,post(server,"legacy\tmove","token",null,null,encoded("홍길동")).status());
+        event=store.begin();assertNull(event.donor());assertEquals(0,event.cheese());store.complete(event.id());
+        assertNull(store.begin());
+      }finally{server.stop(0);}
     }
   }
 

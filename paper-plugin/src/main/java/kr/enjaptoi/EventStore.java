@@ -9,7 +9,9 @@ import java.util.*;
 
 /** Durable receipts and execution intent; game effects are NOT DB transactions. */
 final class EventStore implements AutoCloseable {
-  record Event(String id, String effect, int cheese) {}
+  record Event(String id, String effect, int cheese, String donor) {
+    @Override public String toString(){return "Event[redacted]";} // Do not expose the display name in incidental diagnostics.
+  }
   enum Receipt { QUEUED, DUPLICATE, CONFLICT }
   @FunctionalInterface interface Committer { void commit(Connection c) throws SQLException; }
   @FunctionalInterface private interface Work<T> { T run() throws SQLException; }
@@ -34,15 +36,17 @@ final class EventStore implements AutoCloseable {
         s.execute("PRAGMA busy_timeout=2000");
         s.execute("PRAGMA journal_mode=DELETE");
         s.execute("PRAGMA synchronous=FULL");
+        s.execute("PRAGMA secure_delete=ON");
         s.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, effect TEXT, state TEXT NOT NULL CHECK(state IN ('PENDING','RUNNING','DONE','UNCERTAIN')))");
-        boolean hasCheese=false;
-        try(ResultSet columns=s.executeQuery("PRAGMA table_info(events)")){while(columns.next())if(columns.getString("name").equals("cheese"))hasCheese=true;}
+        boolean hasCheese=false,hasDonor=false;
+        try(ResultSet columns=s.executeQuery("PRAGMA table_info(events)")){while(columns.next()){if(columns.getString("name").equals("cheese"))hasCheese=true;if(columns.getString("name").equals("donor"))hasDonor=true;}}
         if(!hasCheese)s.execute("ALTER TABLE events ADD COLUMN cheese INTEGER NOT NULL DEFAULT 0");
+        if(!hasDonor)s.execute("ALTER TABLE events ADD COLUMN donor TEXT");
         s.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
       }
       transaction(() -> {
         try (Statement s = db.createStatement()) {
-          int changed = s.executeUpdate("UPDATE events SET state='UNCERTAIN' WHERE state='RUNNING'");
+          int changed = s.executeUpdate("UPDATE events SET state='UNCERTAIN',donor=NULL WHERE state='RUNNING'");
           if (changed > 0) writePaused(true);
         }
         return null;
@@ -73,7 +77,8 @@ final class EventStore implements AutoCloseable {
   }
 
   synchronized Receipt enqueue(String id, String effect) throws SQLException {return enqueue(id,effect,0);}
-  synchronized Receipt enqueue(String id, String effect,int cheese) throws SQLException {
+  synchronized Receipt enqueue(String id, String effect,int cheese) throws SQLException {return enqueue(id,effect,cheese,null);}
+  synchronized Receipt enqueue(String id, String effect,int cheese,String donor) throws SQLException {
     if(cheese!=0 && cheese!=DonationNotice.amount(effect))throw new IllegalArgumentException("Invalid cheese amount");
     if (!id.matches("[A-Za-z0-9_-]{1,100}") || !EFFECTS.contains(effect)) throw new IllegalArgumentException("Invalid event");
     return transaction(() -> {
@@ -84,7 +89,9 @@ final class EventStore implements AutoCloseable {
         }
       }
       insert(id,effect,"PENDING");
-      try(PreparedStatement update=db.prepareStatement("UPDATE events SET cheese=? WHERE id=?")){update.setInt(1,cheese);update.setString(2,id);update.executeUpdate();}
+      try(PreparedStatement update=db.prepareStatement("UPDATE events SET cheese=?,donor=? WHERE id=?")){
+        update.setInt(1,cheese);update.setString(2,cheese==0?null:DonationNotice.safeDonor(donor));update.setString(3,id);update.executeUpdate();
+      }
       return Receipt.QUEUED;
     });
   }
@@ -97,17 +104,17 @@ final class EventStore implements AutoCloseable {
     if (paused()) return null;
     return transaction(() -> {
       Event event;
-      try (Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT id,effect,cheese FROM events WHERE state='PENDING' ORDER BY rowid LIMIT 1")) {
+      try (Statement s=db.createStatement();ResultSet r=s.executeQuery("SELECT id,effect,cheese,donor FROM events WHERE state='PENDING' ORDER BY rowid LIMIT 1")) {
         if (!r.next()) return null;
-        event = new Event(r.getString(1),r.getString(2),r.getInt(3));
+        event = new Event(r.getString(1),r.getString(2),r.getInt(3),r.getString(4));
       }
       transition(event.id(),"PENDING","RUNNING");
       return event;
     });
   }
   private void transition(String id,String from,String to) throws SQLException {
-    try (PreparedStatement s=db.prepareStatement("UPDATE events SET state=? WHERE id=? AND state=?")) {
-      s.setString(1,to);s.setString(2,id);s.setString(3,from);
+    try (PreparedStatement s=db.prepareStatement("UPDATE events SET state=?,donor=CASE WHEN ? IN ('DONE','UNCERTAIN') THEN NULL ELSE donor END WHERE id=? AND state=?")) {
+      s.setString(1,to);s.setString(2,to);s.setString(3,id);s.setString(4,from);
       if (s.executeUpdate()!=1) throw new SQLException("Unexpected event state");
     }
   }
