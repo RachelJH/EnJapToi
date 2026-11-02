@@ -27,7 +27,7 @@ class ObservePayAmountTests(unittest.TestCase):
         return result, out.getvalue()
 
     def test_observation_logs_only_valid_amount_and_krw_without_selecting_effect(self):
-        for amount in ('1000', '2000', '5000', '30000', '1234'):
+        for amount in ('1000', '2000', '3000', '4000', '5000', '30000', '1234'):
             with self.subTest(amount=amount), patch.object(receiver.bridge, 'select_event', side_effect=AssertionError('observation must not select an effect')):
                 result, output = self.receive(dict(self.payload, payAmount=amount))
             self.assertFalse(result)

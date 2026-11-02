@@ -20,10 +20,11 @@ import urllib.parse
 import urllib.request
 
 if __package__:
-    from . import oauth, bridge
+    from . import oauth, bridge, amount_mapping
 else:
     import oauth
     import bridge
+    import amount_mapping
 
 
 class ReceiverError(Exception):
@@ -48,24 +49,9 @@ def object_message(value):
 
 
 def amount_map(path):
-    def unique_keys(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError()
-            result[key] = value
-        return result
     try:
-        value = json.loads(Path(path).read_text(encoding='utf-8-sig'), object_pairs_hook=unique_keys)
-        if not isinstance(value, dict):
-            raise ValueError()
-        for key, target in value.items():
-            if not re.fullmatch(r'[1-9][0-9]{0,11}', key):
-                raise ValueError()
-            if type(target) is not int or target not in (1000, 2000, 3000, 4000, 5000, 30000):
-                raise ValueError()
-        return value  # Empty mapping is intentional observe-only mode.
-    except (OSError, ValueError, TypeError):
+        return amount_mapping.load(path)
+    except amount_mapping.MappingError:
         raise ReceiverError('금액 매핑 파일이 올바르지 않습니다.') from None
 
 

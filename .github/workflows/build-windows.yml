@@ -27,6 +27,7 @@ jobs:
           mkdir -p dist/EnJapToi-Windows/plugins dist/EnJapToi-Windows/bridge dist/EnJapToi-Windows/docs
           cp paper-plugin/target/enjaptoi-0.1.0.jar dist/EnJapToi-Windows/plugins/
           cp bridge/*.py bridge/requirements.txt dist/EnJapToi-Windows/bridge/
+          cp bridge/amount-map.example.json dist/EnJapToi-Windows/bridge/
           cp README.md dist/EnJapToi-Windows/설치안내.md
           cp docs/paper-receiver-lifecycle.md dist/EnJapToi-Windows/docs/
           cp docs/donation-effects.md dist/EnJapToi-Windows/docs/
