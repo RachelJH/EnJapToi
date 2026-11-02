@@ -4,20 +4,15 @@ Python 3.10+ standard library only. This script simulates incoming donations.
 import argparse, base64, json, secrets, pathlib, unicodedata, urllib.request, urllib.error
 
 ROOT = pathlib.Path(__file__).resolve().parent
-ALIASES = {"!버프":"buff", "!이동":"move", "!밥":"bread", "!다곡":"pickaxe", "!몹":"mob", "!디버프":"debuff", "!삭제":"clear", "!랜덤즉사":"chancekill", "!지상":"surface", "!즉사":"kill"}
-PRICE = {"buff":1000,"move":1000,"bread":1000,"pickaxe":1000,"mob":2000,"debuff":2000,"clear":5000,"chancekill":5000,"surface":5000,"kill":30000}
+# Game cheese tiers only. Never infer these from the official KRW payAmount.
+PRICE = {"buff":1000,"move":1000,"bread":1000,"pickaxe":1000,"debuff":2000,"surface":3000,"chancekill":4000,"clear":5000,"kill":30000}
+
 
 def select_event(amount, message):
-    if amount == 30000: return "kill"
-    words = message.split()
-    matches = [ALIASES[w] for w in words if w in ALIASES]
-    if matches:
-        event = matches[0]
-        return event if PRICE[event] == amount else None
+    """Messages are display/input data only; they never choose an effect."""
     if amount == 1000: return secrets.choice(["buff", "move", "bread", "pickaxe"])
-    if amount == 2000: return secrets.choice(["mob", "debuff"])
-    if amount == 5000: return secrets.choice(["clear", "chancekill", "surface"])
-    return None
+    return {2000:"debuff", 3000:"surface", 4000:"chancekill", 5000:"clear", 30000:"kill"}.get(amount)
+
 
 def safe_donor(value):
     """Display-only allowlist. Invalid/ambiguous input becomes anonymous, never rewritten into another name."""
@@ -67,7 +62,7 @@ def main():
     ap.add_argument("--port",type=int,default=18765)
     args=ap.parse_args()
     event=select_event(args.amount,args.message)
-    if not event: print("No event: invalid/missing command for this amount");return
+    if not event: print("No event: unsupported cheese tier");return
     token=pathlib.Path(args.token_file).read_text(encoding="utf-8").strip()
     event_id=args.id or secrets.token_urlsafe(18)
     print(json.dumps({"event":event,"id":event_id,"result":deliver(event,event_id,token,args.port)},ensure_ascii=False))

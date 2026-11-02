@@ -16,7 +16,7 @@ final class EventRunner {
     if(event==null)return false;
     lastExecution=now;
     boolean applied;
-    try {applied=execute.apply(event);}
+    try {applied=!event.effect().equals("mob") && execute.apply(event);}
     catch(RuntimeException e){store.uncertain(event.id());throw e;}
     DonationNotice.complete(store,event,applied,announce);
     return true;

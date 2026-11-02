@@ -7,6 +7,34 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 class EventRunnerTest {
   @TempDir Path dir;
+  @Test void survivalIsDurablyCompletedAndAnnouncedOnce()throws Exception{
+    Path db=dir.resolve("survival.db");List<net.kyori.adventure.text.Component> notices=new ArrayList<>();
+    EffectActionsTest.Scene scene=new EffectActionsTest.Scene();
+    try(EventStore store=new EventStore(db)){
+      store.enqueue("survive","chancekill",4000);
+      assertTrue(new EventRunner().run(store,scene.player,10000,3000,
+          e->EffectActions.chanceKill(scene.player,EffectActionsTest.index(15)),notices::add));
+      assertEquals(1,store.count("DONE"));assertEquals(0,scene.killCalls);assertEquals(1,notices.size());
+    }
+    try(EventStore store=new EventStore(db)){
+      assertNull(store.begin());assertEquals(EventStore.Receipt.DUPLICATE,store.enqueue("survive","chancekill",4000));
+    }
+  }
+  @Test void legacyEffectsSurviveRestartWithoutRerollAndMobNeverExecutes()throws Exception{
+    Path db=dir.resolve("legacy.db");EffectActionsTest.Scene scene=new EffectActionsTest.Scene();
+    try(EventStore store=new EventStore(db)){
+      store.enqueue("oldmob","mob",2000);store.enqueue("oldsurface","surface",5000);store.enqueue("oldchance","chancekill",5000);
+    }
+    try(EventStore store=new EventStore(db)){
+      EventRunner runner=new EventRunner();
+      assertTrue(runner.run(store,scene.player,10000,3000,e->{fail("mob executed");return true;},c->fail("mob success")));
+      assertEquals(1,store.count("DONE"));assertEquals(2,store.count("PENDING"));
+      assertEquals(EventStore.Receipt.DUPLICATE,store.enqueue("oldmob","mob",2000));
+      var surface=store.begin();assertEquals("surface",surface.effect());assertEquals(5000,surface.cheese());store.complete(surface.id());
+      var chance=store.begin();assertEquals("chancekill",chance.effect());assertEquals(5000,chance.cheese());store.complete(chance.id());
+      assertEquals(0,scene.spawnCalls);
+    }
+  }
   @Test void deathLeavesQueuePendingAndRespawnResumesInOrderAtThreeSecondIntervals()throws Exception{
     try(EventStore store=new EventStore(dir.resolve("queue.db"))){
       store.enqueue("first","kill",30000);store.enqueue("second","bread",1000);store.enqueue("third","move",1000);
@@ -52,7 +80,7 @@ class EventRunnerTest {
     try(EventStore store=new EventStore(dir.resolve("failures.db"))){
       EffectActionsTest.Scene s=new EffectActionsTest.Scene();s.spawnValid=false;EventRunner runner=new EventRunner();
       store.enqueue("mob","mob",2000);store.enqueue("clear","clear",5000);
-      assertTrue(runner.run(store,s.player,10000,3000,e->EffectActions.spawn(s.player,new org.bukkit.Location(s.world,0,81,0),org.bukkit.entity.EntityType.ZOMBIE),c->fail("canceled mob notice")));
+      assertTrue(runner.run(store,s.player,10000,3000,e->{fail("retired mob must not execute");return true;},c->fail("canceled mob notice")));
       assertTrue(runner.run(store,s.player,13000,3000,e->EffectActions.clearOne(s.player,new Random()),c->fail("empty inventory notice")));
       assertEquals(2,store.count("DONE"));
     }

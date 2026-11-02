@@ -15,6 +15,8 @@ FIXTURES=Path(__file__).parent/'fixtures'
 
 class AmountSafetyTests(unittest.TestCase):
     def setUp(self):
+        choice=patch.object(r.bridge.secrets,"choice",return_value="bread")
+        choice.start();self.addCleanup(choice.stop)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.path=Path(self.tmp.name)/'private/inbox.sqlite3'
         self.journal=r.Journal(self.path);self.addCleanup(lambda:self.journal.close())
@@ -31,7 +33,7 @@ class AmountSafetyTests(unittest.TestCase):
              patch.object(r.oauth,'credentials',side_effect=AssertionError('credentials forbidden')):
             result=check.check(self.payloads,self.mapping)
         self.assertEqual([x['effect'] for x in result['results']],
-                         ['buff','move','bread','pickaxe','mob','debuff','clear','chancekill','surface','kill'])
+                         ['bread','bread','bread','bread','debuff','debuff','clear','chancekill','surface','kill'])
         self.assertIn('SIMULATION_ONLY',result['validation'])
         self.assertNotIn('fictional-donor',json.dumps(result))
         self.assertNotIn('가상후원자',json.dumps(result,ensure_ascii=False))
@@ -44,10 +46,10 @@ class AmountSafetyTests(unittest.TestCase):
         for amount in (1000,1000.0,'1,000','1000.0','-1000','0','01000'):
             self.assertIsNone(check.check([dict(payload,payAmount=amount)],self.mapping)['results'][0]['effect'])
 
-    def test_existing_command_priority_price_and_roulette_are_reused(self):
+    def test_messages_do_not_override_tiers_or_roulette(self):
         p=self.payloads[0]
-        examples=[('1000','!밥 !이동','bread'),('1000','!몹',None),
-                  ('5000','!밥',None),('30000','!밥','kill')]
+        examples=[('1000','!밥 !이동','bread'),('1000','!몹','bread'),
+                  ('5000','!밥','clear'),('30000','!밥','kill')]
         for amount,text,expected in examples:
             self.assertEqual(check.check([dict(p,payAmount=amount,donationText=text)],self.mapping)['results'][0]['effect'],expected)
         with patch.object(r.bridge.secrets,'choice',return_value='buff') as choice:

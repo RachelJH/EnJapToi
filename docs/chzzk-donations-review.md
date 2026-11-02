@@ -1,5 +1,6 @@
 # 실시간 후원 수신기 병합 전 리뷰
 
+> Current effect/tier rules and validation: [donation-effects.md](donation-effects.md). Older rule examples and test results below are historical.
 대상: `feat/chzzk-donations`, 최초 구현 `b1b376c` 및 본 리뷰 수정.
 최초 리뷰에서는 실제 계정·후원을 사용하지 않았고, 기존 게임 선택 규칙과 Paper 소스를 변경하지 않았습니다. 후속 Paper 저장 개선은 별도 절에서 구분합니다.
 

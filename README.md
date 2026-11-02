@@ -1,5 +1,6 @@
 # 엔잡퇴 v0.1 — Paper 플러그인 소스 + 로컬 후원 시뮬레이터
 
+> 현재 규칙과 이번 검증 결과는 [후원 효과 문서](docs/donation-effects.md)를 기준으로 합니다. 아래 이전 변경 기록의 효과표·메시지 명령어·테스트 통과 수치는 과거 기록입니다.
 **상태: Java 25 빌드·Paper 26.3 빌드 230 서버 통합 검증 완료·게임 내 효과 미검증 개발 초안. 공식 치지직 OAuth·실시간 후원 수신기를 포함하며, 실제 계정·후원 및 금액 대응은 추가 검증이 필요합니다.**
 
 대상: Windows / Java 25 / 사용자 제공 Paper 26.3 / 방송인 `Yirue`.
@@ -23,8 +24,8 @@
 Python 3.10+ 설치 후, **서버가 실행 중인 친구 PC**에서 다음을 실행합니다. 경로는 실제 서버 경로로 변경하세요.
 
 ```powershell
-python bridge\bridge.py --amount 1000 --message "!밥" --token-file "C:\\MinecraftServer\\plugins\\EnJapToi\\bridge-token.txt"
-python bridge\bridge.py --amount 5000 --message "!랜덤즉사" --token-file "C:\\MinecraftServer\\plugins\\EnJapToi\\bridge-token.txt" --id sample1
+python bridge\bridge.py --amount 1000 --token-file "C:\\MinecraftServer\\plugins\\EnJapToi\\bridge-token.txt"
+python bridge\bridge.py --amount 4000 --token-file "C:\\MinecraftServer\\plugins\\EnJapToi\\bridge-token.txt" --id sample1
 ```
 
 두 번째 명령을 같은 `--id sample1`로 반복하면 중복으로 인식되어야 합니다.

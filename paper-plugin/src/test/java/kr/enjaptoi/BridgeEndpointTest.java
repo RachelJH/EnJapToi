@@ -12,6 +12,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BridgeEndpointTest {
   @TempDir Path temp;
+  @Test void currentTiersAcceptedAndMobAndOldTierMetadataRejected() throws Exception {
+    try(EventStore store=new EventStore(temp.resolve("tiers.db"))) {
+      HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+      server.createContext("/event",BridgeEndpoint.managed("token","instance",store::enqueue));server.start();
+      try {
+        String[] effects={"buff","move","bread","pickaxe","debuff","surface","chancekill","clear","kill"};
+        for(String effect:effects){
+          int amount=DonationNotice.amount(effect);
+          assertEquals(200,post(server,effect+"\t"+effect,"token","instance",Integer.toString(amount)).status());
+          var event=store.begin();assertEquals(effect,event.effect());assertEquals(amount,event.cheese());store.complete(event.id());
+        }
+        assertEquals(400,post(server,"oldmob\tmob","token").status());
+        assertEquals(400,post(server,"oldsurface\tsurface","token","instance","5000").status());
+        assertEquals(400,post(server,"oldchance\tchancekill","token","instance","5000").status());
+        assertNull(store.begin());
+      } finally {server.stop(0);}
+    }
+  }
   record Response(int status,String body){}
   Response post(HttpServer server,String body,String token) throws Exception {return post(server,body,token,null,null);}
   Response post(HttpServer server,String body,String token,String instance,String cheese) throws Exception {return post(server,body,token,instance,cheese,null);}

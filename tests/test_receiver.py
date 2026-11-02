@@ -53,7 +53,8 @@ class ReceiverTests(unittest.TestCase):
         self.assertFalse(r.Intake(self.journal, 'channel', {}).receive(self.payload))
         self.assertEqual(self.journal.counts(), {'ignored':1})
 
-    def test_intake_no_pii_and_no_fake_upstream_dedup(self):
+    @patch.object(r.bridge.secrets,"choice",return_value="bread")
+    def test_intake_no_pii_and_no_fake_upstream_dedup(self, choice):
         self.assertTrue(self.intake.receive(json.dumps(self.payload)))
         self.assertTrue(self.intake.receive(self.payload))
         rows = self.journal.db.execute('SELECT id,effect,status FROM events').fetchall()
@@ -147,14 +148,14 @@ class ReceiverTests(unittest.TestCase):
         api=r.Api(tokens)
         response=Mock();response.read.return_value=b'{"code":200,"content":{"ok":true}}'
         response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
-        opener=Mock();opener.open.side_effect=[urllib.error.HTTPError('secret-url',401,'secret',{},None),response]
+        opener=Mock();opener.open.side_effect=[urllib.error.HTTPError('secret-url',401,'secret',{},io.BytesIO()),response]
         with patch.object(r.urllib.request,'build_opener',return_value=opener):
             self.assertEqual(api.call('/test'),{'ok':True})
         self.assertEqual([c.kwargs for c in tokens.get.call_args_list],[{'force':False},{'force':True}])
         req=opener.open.call_args.args[0];self.assertEqual(req.get_header('Authorization'),'Bearer new-token')
         for code in (403,429,500):
             tokens.get.side_effect=None;tokens.get.return_value='secret-token'
-            opener.open.side_effect=urllib.error.HTTPError('secret-url',code,'secret-body',{},None)
+            opener.open.side_effect=urllib.error.HTTPError('secret-url',code,'secret-body',{},io.BytesIO())
             with patch.object(r.urllib.request,'build_opener',return_value=opener):
                 with self.assertRaises(r.ReceiverError) as error:api.call('/test')
                 self.assertNotIn('secret',str(error.exception))

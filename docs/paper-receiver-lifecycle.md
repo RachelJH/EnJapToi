@@ -1,5 +1,6 @@
 # Paper와 함께 시작·종료하는 수신기
 
+> Current effect/tier rules and validation: [donation-effects.md](donation-effects.md). Older rule examples and test results below are historical.
 ## 변경 이유와 동작
 
 이전 수신기는 Paper와 별도로 실행되고 Python SQLite에 먼저 저장했습니다. 서버가 꺼져 있는 동안 받은 후원이 다음 실행에서 게임 효과로 이어질 수 있었습니다.

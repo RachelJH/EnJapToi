@@ -31,13 +31,13 @@ final class BridgeEndpoint implements HttpHandler {
       byte[] bytes=exchange.getRequestBody().readNBytes(4097);
       if(bytes.length>4096){respond(exchange,400,"invalid event");return;}
       String[] parts=new String(bytes,StandardCharsets.UTF_8).trim().split("\\t",-1);
-      if(parts.length!=2 || !parts[0].matches("[A-Za-z0-9_-]{1,100}") || !parts[1].matches("buff|move|bread|pickaxe|mob|debuff|clear|chancekill|surface|kill")){
+      if(parts.length!=2 || !parts[0].matches("[A-Za-z0-9_-]{1,100}") || !parts[1].matches("buff|move|bread|pickaxe|debuff|clear|chancekill|surface|kill")){
         respond(exchange,400,"invalid event");return;
       }
       int cheese=0;
       String amount=exchange.getRequestHeaders().getFirst("X-EJT-Cheese");
       if(amount!=null){
-        if(sentInstance==null || !amount.matches("1000|2000|5000|30000") || Integer.parseInt(amount)!=DonationNotice.amount(parts[1])){respond(exchange,400,"invalid cheese");return;}
+        if(sentInstance==null || !amount.matches("1000|2000|3000|4000|5000|30000") || Integer.parseInt(amount)!=DonationNotice.amount(parts[1])){respond(exchange,400,"invalid cheese");return;}
         cheese=Integer.parseInt(amount);
       }
       String donor=null;

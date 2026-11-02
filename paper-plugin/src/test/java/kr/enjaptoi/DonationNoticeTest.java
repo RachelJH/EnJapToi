@@ -12,7 +12,10 @@ class DonationNoticeTest {
   @Test void onlyKnownCheeseHasLiteralAnonymousNotice() {
     assertEquals("\"익명의 후원자\"님이 \"1,000치즈\"를 후원하셨습니다! (후렴과 효과)",((TextComponent)DonationNotice.message("move",1000)).content());
     assertNull(DonationNotice.message("move",0));assertNull(DonationNotice.message("move",5000));
-    assertEquals(5000,DonationNotice.amount("surface"));assertEquals(30000,DonationNotice.amount("kill"));
+    assertEquals(3000,DonationNotice.amount("surface"));assertEquals(30000,DonationNotice.amount("kill"));
+    assertEquals(4000,DonationNotice.amount("chancekill"));
+    assertNotNull(DonationNotice.message("surface",3000));assertNotNull(DonationNotice.message("chancekill",4000));
+    assertNull(DonationNotice.message("mob",2000));
   }
   @Test void successfulNoticeOnceAfterDurableCompletionAndMetadataSurvivesRestart() throws Exception {
     Path db=dir.resolve("events.db");List<Component> notices=new ArrayList<>();

@@ -35,7 +35,8 @@ class LifetimeTests(unittest.TestCase):
             self.assertIsNone(receipts.pending())
             self.assertEqual([p.name for p in Path(d).iterdir()],['token'])
 
-    def test_notice_amount_uses_mapped_game_price_not_raw_krw_or_donor_data(self):
+    @patch.object(r.bridge.secrets,'choice',return_value='move')
+    def test_notice_amount_uses_mapped_game_price_not_raw_krw_or_donor_data(self, choice):
         with tempfile.TemporaryDirectory() as d:
             token=Path(d)/'token';token.write_text('mock-token')
             send=Mock(return_value='queued')

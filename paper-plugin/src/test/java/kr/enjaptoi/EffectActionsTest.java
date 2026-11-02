@@ -51,15 +51,16 @@ class EffectActionsTest {
     s.dead=false;s.health=20;s.rejectDeath=true;assertFalse(EffectActions.kill(s.player));
     s.rejectDeath=false;assertTrue(EffectActions.kill(s.player));assertEquals(0,s.health);
   }
-  @Test void chanceKillHasExactlyFifteenWinningValuesOutOfHundred(){
-    int wins=0;
-    for(int roll=0;roll<100;roll++){Scene s=new Scene();if(EffectActions.chanceKill(s.player,index(roll)))wins++;}
-    assertEquals(15,wins);
-  }
-  @Test void canceledSpawnAndMissingDestinationAreFailures(){
-    Scene s=new Scene();assertFalse(EffectActions.spawn(s.player,null,EntityType.ZOMBIE));assertEquals(0,s.spawnCalls);
-    s.spawnValid=false;assertFalse(EffectActions.spawn(s.player,new Location(s.world,0,81,0),EntityType.ZOMBIE));
-    s.spawnValid=true;assertTrue(EffectActions.spawn(s.player,new Location(s.world,0,81,0),EntityType.ZOMBIE));
+  @Test void chanceKillCompletesAllOutcomesWithExactlyFifteenDeaths() {
+    int deaths=0;
+    for(int roll=0;roll<100;roll++){
+      Scene s=new Scene();assertTrue(EffectActions.chanceKill(s.player,index(roll)));
+      if(s.dead)deaths++;
+      assertEquals(roll<15?1:0,s.killCalls);
+    }
+    assertEquals(15,deaths);
+    Scene s=new Scene();s.rejectDeath=true;assertFalse(EffectActions.chanceKill(s.player,index(0)));
+    s.dead=true;assertFalse(EffectActions.chanceKill(s.player,index(99)));
   }
   @Test void grantRequiresAllInventoryAndDropQuantities(){
     Scene s=new Scene();assertTrue(EffectActions.give(s.player,new Stack(Material.BREAD,5)));assertEquals(5,s.inserted);assertEquals(0,s.dropCalls);

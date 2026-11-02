@@ -32,7 +32,7 @@ class DonorNoticeTests(unittest.TestCase):
             receipts = receiver.PaperReceipts(token, 18765, 'instance', Mock(alive=lambda:True), send)
             intake = receiver.Intake(receipts, 'channel', {'123':1000}, allow_game_events=True)
             out = io.StringIO()
-            with contextlib.redirect_stdout(out), patch.object(bridge, 'select_event', wraps=bridge.select_event) as select:
+            with contextlib.redirect_stdout(out), patch.object(bridge.secrets, 'choice', return_value='move'), patch.object(bridge, 'select_event', wraps=bridge.select_event) as select:
                 self.assertTrue(intake.receive(self.payload()))
             self.assertEqual(out.getvalue(), '')
             select.assert_called_once_with(1000, '!이동')

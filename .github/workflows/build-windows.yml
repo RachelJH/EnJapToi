@@ -29,6 +29,7 @@ jobs:
           cp bridge/*.py bridge/requirements.txt dist/EnJapToi-Windows/bridge/
           cp README.md dist/EnJapToi-Windows/설치안내.md
           cp docs/paper-receiver-lifecycle.md dist/EnJapToi-Windows/docs/
+          cp docs/donation-effects.md dist/EnJapToi-Windows/docs/
           cd dist
           zip -qr EnJapToi-Windows.zip EnJapToi-Windows
           sha256sum EnJapToi-Windows.zip > EnJapToi-Windows.zip.sha256

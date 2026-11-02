@@ -79,7 +79,11 @@ final class EventStore implements AutoCloseable {
   synchronized Receipt enqueue(String id, String effect) throws SQLException {return enqueue(id,effect,0);}
   synchronized Receipt enqueue(String id, String effect,int cheese) throws SQLException {return enqueue(id,effect,cheese,null);}
   synchronized Receipt enqueue(String id, String effect,int cheese,String donor) throws SQLException {
-    if(cheese!=0 && cheese!=DonationNotice.amount(effect))throw new IllegalArgumentException("Invalid cheese amount");
+    // Accept old stored tier metadata unchanged, including legacy state imports.
+    // The HTTP boundary accepts only current tiers and excludes new mob events.
+    if(cheese!=0 && cheese!=DonationNotice.amount(effect)
+        && !(cheese==2000 && effect.equals("mob"))
+        && !(cheese==5000 && (effect.equals("surface") || effect.equals("chancekill"))))throw new IllegalArgumentException("Invalid cheese amount");
     if (!id.matches("[A-Za-z0-9_-]{1,100}") || !EFFECTS.contains(effect)) throw new IllegalArgumentException("Invalid event");
     return transaction(() -> {
       try (PreparedStatement q = db.prepareStatement("SELECT effect FROM events WHERE id=?")) {

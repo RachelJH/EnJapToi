@@ -2,7 +2,6 @@ package kr.enjaptoi;
 
 import com.sun.net.httpserver.HttpServer;
 import org.bukkit.*;
-import org.bukkit.block.Block;
 import org.bukkit.command.*;
 import org.bukkit.entity.*;
 import org.bukkit.inventory.ItemStack;
@@ -139,7 +138,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
       case "clear" -> success=EffectActions.clearOne(p,random);
       case "chancekill" -> success=EffectActions.chanceKill(p,random);
       case "kill" -> success=EffectActions.kill(p);
-      case "mob" -> {EntityType[] types={EntityType.ZOMBIE,EntityType.SKELETON,EntityType.SPIDER,EntityType.CREEPER,EntityType.HUSK,EntityType.STRAY}; Location at=findSpawn(p);success=at!=null && EffectActions.spawn(p,at,types[random.nextInt(types.length)]);}
+      case "mob" -> success=false; // Retired legacy effect; never spawn or announce success.
       case "move" -> {Location at=findTeleport(p,false);if(at==null)success=false;else success=p.teleport(at);}
       case "surface" -> {Location at=findTeleport(p,true);if(at==null)success=false;else success=p.teleport(at);}
       default -> {success=false;}
@@ -148,18 +147,7 @@ public class EnJapToi extends JavaPlugin implements CommandExecutor {
     p.playSound(p.getLocation(),Sound.BLOCK_NOTE_BLOCK_PLING,1f,1f);
     return success;
   }
-  private Location findSpawn(Player p) {
-    Location origin=p.getLocation(); int min=getConfig().getInt("spawn-min-radius",3),max=getConfig().getInt("spawn-max-radius",7);
-    for(int i=0;i<10;i++){double a=random.nextDouble()*Math.PI*2;double r=min+random.nextDouble()*Math.max(1,max-min);Location at=origin.clone().add(Math.cos(a)*r,0,Math.sin(a)*r);Location safe=safeAt(at.getWorld(),at.getBlockX(),at.getBlockY(),at.getBlockZ());if(safe!=null)return safe;}return null;
-  }
   private Location findTeleport(Player p,boolean surface) {
     return SafeTeleport.destination(p,surface,random);
-  }
-  private Location safeAt(World w,int x,int y,int z){
-    if(y<=w.getMinHeight()||y+2>=w.getMaxHeight())return null;
-    Block below=w.getBlockAt(x,y-1,z),feet=w.getBlockAt(x,y,z),head=w.getBlockAt(x,y+1,z);
-    if(!below.getType().isSolid()||below.isLiquid()||feet.isLiquid()||head.isLiquid()||!feet.isPassable()||!head.isPassable())return null;
-    if(below.getType().name().contains("MAGMA")||below.getType().name().contains("CACTUS"))return null;
-    return new Location(w,x+0.5,y,z+0.5);
   }
 }

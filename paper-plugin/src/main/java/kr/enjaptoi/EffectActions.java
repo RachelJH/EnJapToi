@@ -1,7 +1,6 @@
 package kr.enjaptoi;
 
 import java.util.*;
-import org.bukkit.Location;
 import org.bukkit.entity.*;
 import org.bukkit.inventory.*;
 
@@ -13,12 +12,7 @@ final class EffectActions {
     player.setHealth(0.0);
     return player.isDead() || player.getHealth()<=0;
   }
-  static boolean chanceKill(Player player,Random random){return ready(player) && random.nextInt(100)<15 && kill(player);}
-  static boolean spawn(Player player,Location at,EntityType type){
-    if(!ready(player) || at==null)return false;
-    Entity spawned=player.getWorld().spawnEntity(at,type);
-    return spawned!=null && spawned.isValid() && !spawned.isDead();
-  }
+  static boolean chanceKill(Player player,Random random){return ready(player) && (random.nextInt(100)>=15 || kill(player));}
   static boolean give(Player player,ItemStack item){
     if(!ready(player))return false;
     Map<Integer,ItemStack> leftovers=player.getInventory().addItem(item.clone());

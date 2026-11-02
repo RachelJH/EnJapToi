@@ -1,5 +1,6 @@
 # Paper 이벤트 저장과 강제 종료 복구
 
+> Current effect/tier rules and validation: [donation-effects.md](donation-effects.md). Older rule examples and test results below are historical.
 Java 25 / Paper 26.3 빌드 230 기준입니다. 게임별 효과, 후원 금액 규칙, 기본 60 ticks(3초) 간격과 Yirue 오프라인 대기는 유지합니다.
 
 ## 수신 응답

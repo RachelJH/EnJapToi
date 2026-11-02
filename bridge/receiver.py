@@ -62,7 +62,7 @@ def amount_map(path):
         for key, target in value.items():
             if not re.fullmatch(r'[1-9][0-9]{0,11}', key):
                 raise ValueError()
-            if type(target) is not int or target not in (1000, 2000, 5000, 30000):
+            if type(target) is not int or target not in (1000, 2000, 3000, 4000, 5000, 30000):
                 raise ValueError()
         return value  # Empty mapping is intentional observe-only mode.
     except (OSError, ValueError, TypeError):
@@ -142,6 +142,10 @@ class Journal:
         with self.lock, self.db:
             self.db.execute("UPDATE events SET status='done' WHERE id=?", (event_id,))
 
+    def retire(self, event_id):
+        with self.lock, self.db:
+            self.db.execute("UPDATE events SET status='retired' WHERE id=?", (event_id,))
+
     def retry(self, event_id, attempts, now):
         with self.lock, self.db:
             self.db.execute('UPDATE events SET attempts=?,retry_at=? WHERE id=?',
@@ -210,6 +214,10 @@ def deliver_one(journal, token_file, port=18765, now=None, send=bridge.deliver, 
     if row is None or row[3] > now:
         return None
     event_id, effect, attempts, _ = row
+    if effect == 'mob':
+        # Retire old outbox entries without delivery, reroll or deleting their IDs.
+        journal.retire(event_id)
+        return 'retired'
     try:
         token = Path(token_file).read_text(encoding='utf-8').strip()
         if not token:

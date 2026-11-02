@@ -1,5 +1,6 @@
 # 후원 표시명: 공식 명세 확인 및 구현 정책
 
+> Current effect/tier rules and validation: [donation-effects.md](donation-effects.md). Older rule examples and test results below are historical.
 확인일: 2026-11-01. 실제 계정·후원 없이 공식 문서와 모의 데이터로 확인했습니다.
 
 ## 공식 문서에 명시된 사실

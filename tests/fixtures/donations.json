@@ -67,7 +67,7 @@
     "channelId": "simulation-channel",
     "donatorChannelId": "fictional-donor",
     "donatorNickname": "가상후원자",
-    "payAmount": "5000",
+    "payAmount": "4000",
     "donationText": "!랜덤즉사",
     "emojis": {}
   },
@@ -76,7 +76,7 @@
     "channelId": "simulation-channel",
     "donatorChannelId": "fictional-donor",
     "donatorNickname": "가상후원자",
-    "payAmount": "5000",
+    "payAmount": "3000",
     "donationText": "!지상",
     "emojis": {}
   },

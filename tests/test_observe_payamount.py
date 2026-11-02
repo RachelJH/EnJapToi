@@ -35,7 +35,8 @@ class ObservePayAmountTests(unittest.TestCase):
             self.assertNotIn('private-', output)
         self.assertTrue(all(call.args == (None,) for call in self.journal.add.call_args_list))
 
-    def test_delivery_enabled_never_logs_amount_and_conversion_is_unchanged(self):
+    @patch.object(receiver.bridge.secrets,'choice',return_value='bread')
+    def test_delivery_enabled_never_logs_amount_and_conversion_is_unchanged(self, choice):
         result, output = self.receive(self.payload, enabled=True)
         self.assertTrue(result)
         self.assertEqual(output, '')
