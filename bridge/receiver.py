@@ -160,21 +160,32 @@ class Journal:
 
 
 class Intake:
-    def __init__(self, journal, channel, mapping, donation_type='CHAT', allow_game_events=False):
+    def __init__(self, journal, channel, mapping, donation_type='CHAT', allow_game_events=False, diagnostics=False):
         self.journal, self.channel, self.mapping = journal, channel, mapping
         self.donation_type = donation_type
         self.allow_game_events = allow_game_events
+        self.diagnostics = diagnostics
 
     def receive(self, payload):
         data = object_message(payload)
+        # Fixed reason codes only: never log donor, message, channel, or raw payload.
         if data.get('channelId') != self.channel:
+            if self.diagnostics:
+                print('DONATION ignored: channel_mismatch', flush=True)
             return False
         amount = data.get('payAmount')
         text = data.get('donationText')
-        if (data.get('donationType') != self.donation_type or
-                not isinstance(amount, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', amount) or
-                not isinstance(text, str) or len(text) > 16384):
+        reason = None
+        if data.get('donationType') != self.donation_type:
+            reason = 'donation_type_mismatch'
+        elif not isinstance(amount, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', amount):
+            reason = 'invalid_pay_amount'
+        elif not isinstance(text, str) or len(text) > 16384:
+            reason = 'invalid_donation_text'
+        if reason is not None:
             self.journal.add(None)
+            if self.diagnostics:
+                print('DONATION ignored: ' + reason, flush=True)
             return False
         if not self.allow_game_events:
             self.journal.add(None)
@@ -581,7 +592,7 @@ def main(argv=None):
         import socketio  # Fail before entering reconnect loop when dependencies are missing.
         del socketio
         journal = PaperReceipts(args.token_file, args.port, os.environ['EJT_SERVER_INSTANCE'], lifetime)
-        intake = Intake(journal, args.channel_id, mapping, args.donation_type, allow_game_events=enabled)
+        intake = Intake(journal, args.channel_id, mapping, args.donation_type, allow_game_events=enabled, diagnostics=True)
         print('Paper 연동 수신 시작. 서버 종료 시 수신 프로세스도 종료합니다.')
         if not enabled:
             print('관찰 모드: 금액 미확정 상태의 게임 효과 선택·전달을 차단합니다.')
