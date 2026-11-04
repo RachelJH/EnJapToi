@@ -71,7 +71,7 @@ class ObservePayAmountTests(unittest.TestCase):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
                     self.assertFalse(intake.receive(dict(self.payload, **change)))
-                self.assertEqual(out.getvalue(), f'DONATION ignored: {reason}\\n')
+                self.assertEqual(out.getvalue(), f'DONATION ignored: {reason}\n')
                 self.assertNotIn('private-', out.getvalue())
                 self.assertNotIn('1000', out.getvalue())
 
