@@ -57,6 +57,24 @@ class ObservePayAmountTests(unittest.TestCase):
                 self.assertFalse(result)
                 self.assertEqual(output, '')
 
+    def test_managed_diagnostics_reveal_only_fixed_rejection_reason(self):
+        intake = receiver.Intake(self.journal, 'private-channel', {},
+                                 diagnostics=True)
+        cases = [
+            ({'channelId': 'another-channel'}, 'channel_mismatch'),
+            ({'donationType': 'VIDEO'}, 'donation_type_mismatch'),
+            ({'payAmount': 1000}, 'invalid_pay_amount'),
+            ({'donationText': None}, 'invalid_donation_text'),
+        ]
+        for change, reason in cases:
+            with self.subTest(reason=reason):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertFalse(intake.receive(dict(self.payload, **change)))
+                self.assertEqual(out.getvalue(), f'DONATION ignored: {reason}\\n')
+                self.assertNotIn('private-', out.getvalue())
+                self.assertNotIn('1000', out.getvalue())
+
     def test_malformed_event_has_no_amount_or_private_output(self):
         intake = receiver.Intake(self.journal, 'private-channel', {})
         for value in ('private-invalid-json', [], None, 1000):
