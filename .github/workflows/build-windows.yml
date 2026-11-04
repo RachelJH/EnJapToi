@@ -1,6 +1,8 @@
 name: Build EnJapToi Windows package
 
 on:
+  push:
+    branches: [feature/observe-payamount]
   workflow_dispatch:
 
 permissions:
@@ -18,6 +20,8 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      - name: Test Python bridge
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build and test Paper plugin
         run: mvn -B -f paper-plugin/pom.xml clean package
       - name: Assemble Windows installation files
